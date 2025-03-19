@@ -1,0 +1,1 @@
+python3 -c "from langchain_huggingface import HuggingFaceEmbeddings; HuggingFaceEmbeddings(model_kwargs={'device':'cpu'})"

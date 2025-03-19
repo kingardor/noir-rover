@@ -1,0 +1,110 @@
+version: '1.0.0'
+    
+services:
+  redis:
+    image: "redislabs/redismod:latest"
+    restart: always
+    environment:
+      - ALLOW_EMPTY_PASSWORD=yes
+    network_mode: "host"
+    
+  noir:
+    build:
+      context: .
+      dockerfile: docker/noir/Dockerfile
+      target: noir
+    container_name: NOIR
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /usr/bin/docker:/usr/bin/docker
+      - /tmp/.X11-unix/:/tmp/.X11-unix
+    security_opt:
+      - seccomp:unconfined
+    environment:
+      DISPLAY: $DISPLAY
+      LOG_LEVEL: 'debug'
+      LANGMODEL: 'ollama-rag'
+      OLLAMA_KEEP_ALIVE: '1h'
+      OLLAMA_HOST: '0.0.0.0'
+      OLLAMA_LOAD_TIMEOUT: '1h'
+      ENABLE_ASR: '0'
+      ENABLE_VISION: '1'
+    restart: always
+    network_mode: "host"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+        limits:
+          memory: 8G
+    depends_on:
+      - redis
+
+  noir-cv:
+    build:
+      context: .
+      dockerfile: docker/cv/Dockerfile
+      target: noir-cv
+    container_name: NOIR-CV
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /usr/bin/docker:/usr/bin/docker
+      - /tmp/.X11-unix/:/tmp/.X11-unix
+    security_opt:
+      - seccomp:unconfined
+    environment:
+      DISPLAY: $DISPLAY
+      LOG_LEVEL: 'debug'
+      ENABLE_FACEREC: 1
+      ENABLE_LLAVA: 1
+    restart: always
+    network_mode: "host"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+        limits:
+          memory: 4G
+    depends_on:
+      - redis
+  
+  noir-asr:
+    devices:
+     - /dev/snd:/dev/snd
+    build:
+      context: .
+      dockerfile: docker/asr/Dockerfile
+      target: noir-asr
+    container_name: NOIR-ASR
+    group_add:
+      - 29
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /usr/bin/docker:/usr/bin/docker
+      - /tmp/.X11-unix/:/tmp/.X11-unix
+      - ${XDG_RUNTIME_DIR}/pulse/native:${XDG_RUNTIME_DIR}/pulse/native
+      - ~/.config/pulse/cookie:/root/.config/pulse/cookie
+    security_opt:
+      - seccomp:unconfined
+    environment:
+      LOG_LEVEL: 'debug'
+      PULSE_SERVER: unix:${XDG_RUNTIME_DIR}/pulse/native
+    restart: always
+    network_mode: "host"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+        limits:
+          memory: 4G
+    depends_on:
+      - redis
