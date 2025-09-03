@@ -5,7 +5,9 @@ services:
     environment:
       - ROSBRIDGE_HOST=localhost
       - ROSBRIDGE_PORT=9090
-      - PORT=8000
+      - PORT=6969
+    extra_hosts:
+      - linaro-alip:10.42.0.1
 
   noir-ros-noetic:
     build: ros-noetic
@@ -13,3 +15,5 @@ services:
     environment:
       - ROS_MASTER_URI=http://10.42.0.1:11311
       - ROS_IP=10.42.0.160
+    extra_hosts:
+      - linaro-alip:10.42.0.1
