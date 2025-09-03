@@ -1,0 +1,7 @@
+fastapi==0.70.0
+uvicorn==0.16.0
+pydantic<2
+roslibpy
+requests
+cryptography==3.3.2
+pyOpenSSL==20.0.1

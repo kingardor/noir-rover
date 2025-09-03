@@ -1,0 +1,15 @@
+services:
+  noir-api:
+    build: api
+    network_mode: "host"
+    environment:
+      - ROSBRIDGE_HOST=localhost
+      - ROSBRIDGE_PORT=9090
+      - PORT=8000
+
+  noir-ros-noetic:
+    build: ros-noetic
+    network_mode: "host"
+    environment:
+      - ROS_MASTER_URI=http://10.42.0.1:11311
+      - ROS_IP=10.42.0.160
