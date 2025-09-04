@@ -17,3 +17,19 @@ services:
       - ROS_IP=10.42.0.160
     extra_hosts:
       - linaro-alip:10.42.0.1
+  
+  controller-monitor:
+    build: noir
+    container_name: noir
+    network_mode: "host"
+    environment:
+      - CONTROLLER_DEVICE=/dev/input/event20
+    devices:
+      - /dev/input/event20:/dev/input/event20
+    volumes:
+      - /dev/input:/dev/input:ro
+    privileged: false
+    restart: unless-stopped
+    stdin_open: true
+    tty: true
+

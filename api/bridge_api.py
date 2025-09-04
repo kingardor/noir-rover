@@ -9,7 +9,6 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks, Response
 from pydantic import BaseModel
 import roslibpy
 
-# Configuration
 CMD_VEL_TOPIC = "/cmd_vel"
 CAMERA_TOPIC = "/CoreNode/jpg"
 ROSBRIDGE_HOST = os.getenv("ROSBRIDGE_HOST", "localhost") 
@@ -21,7 +20,7 @@ camera_lock = threading.Lock()
 class Vel(BaseModel):
     x: float = 0.0
     y: float = 0.0
-    yaw: float = 0.0
+    rotate: float = 0.0
     duration_ms: Optional[int] = None
 
 class ScoutRosBridgeClient:
@@ -71,19 +70,19 @@ class ScoutRosBridgeClient:
     def is_connected(self):
         return self._ros.is_connected
         
-    def publish_twist(self, x=0.0, y=0.0, yaw=0.0):
+    def publish_twist(self, x=0.0, y=0.0, rotate=0.0):
         """Publish movement command (Go-style mapping)"""
         if not self.is_connected:
             return False
             
         # Go mapping: Linear.X = strafe, Linear.Y = forward, Angular.Z = rotation
         msg = {
-            "linear": {"x": float(y), "y": float(x), "z": 0.0},  # Swap X/Y for Scout
-            "angular": {"x": 0.0, "y": 0.0, "z": float(yaw)}
+            "linear": {"x": float(x), "y": float(y), "z": 0.0},  # Swap X/Y for Scout
+            "angular": {"x": 0.0, "y": 0.0, "z": float(rotate)}
         }
         
         self._cmd_pub.publish(roslibpy.Message(msg))
-        print(f"[SCOUT] Move: forward={x}, strafe={y}, rotate={yaw}")
+        print(f"[SCOUT] Move: forward={y}, strafe={x}, rotate={rotate}")
         return True
         
     def stop_robot(self):
@@ -131,7 +130,7 @@ def move_robot(v: Vel, background_tasks: BackgroundTasks):
     if not ros_client.is_connected:
         raise HTTPException(503, "Not connected to ROS")
         
-    success = ros_client.publish_twist(v.x, v.y, v.yaw)
+    success = ros_client.publish_twist(v.x, v.y, v.rotate)
     if not success:
         raise HTTPException(503, "Failed to publish movement")
     
@@ -143,7 +142,7 @@ def move_robot(v: Vel, background_tasks: BackgroundTasks):
     
     return {
         "ok": True,
-        "message": f"Moving: forward={v.x}, strafe={v.y}, rotate={v.yaw}",
+        "message": f"Moving: forward={v.x}, strafe={v.y}, rotate={v.rotate}",
         "duration_ms": v.duration_ms
     }
 
