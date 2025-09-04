@@ -108,7 +108,7 @@ def startup_event():
     ros_thread.start()
     print("[API] ROS connection started")
 
-@app.get("/health")
+@app.get("/status")
 def health():
     with camera_lock:
         has_frames = len(camera_data) > 0
