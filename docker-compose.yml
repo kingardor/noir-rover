@@ -33,3 +33,23 @@ services:
     stdin_open: true
     tty: true
 
+  noir-ai:
+    build: ai
+    network_mode: "host"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /usr/bin/docker:/usr/bin/docker
+      - /tmp/.X11-unix:/tmp/.X11-unix:ro
+    security_opt:
+      - seccomp:unconfined
+    environment:
+      DISPLAY: $DISPLAY
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+        limits:
+          memory: 8G
