@@ -58,7 +58,7 @@ class XboxBotDriver:
         self.FWD_TO_API = fwd_to_api or XboxBotDriver.FWD_TO_API
 
         self.dev = self._open_device()
-        print(f"[ok] Using controller: '{self.dev.name}'")
+        print(f"[ok] Using controller: '{self.dev.name}'", flush=True)
 
         self.rumble_strong = self.dev.upload_effect(self._make_rumble(1.0, 0.9, -1))
         self.rumble_weak = self.dev.upload_effect(self._make_rumble(0.3, 0.2, -1))

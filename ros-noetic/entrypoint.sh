@@ -1,14 +1,85 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -Eeuo pipefail
 
+# ─────────── Config ───────────
+: "${REMOTE_HOST:=10.42.0.1}"
+: "${REMOTE_USER:=linaro}"
+: "${REMOTE_PASS:=linaro}"
+: "${REMOTE_NODE:=/NavPathNode}"
+
+: "${ROSBRIDGE_ADDRESS:=0.0.0.0}"
+: "${ROSBRIDGE_PORT:=9090}"
+
+# API
+: "${API_HOST:=0.0.0.0}"
+: "${PORT:=8011}"
+: "${API_WORKERS:=1}"
+: "${API_LOG_LEVEL:=info}"
+
+# Noir/Xbox loop
+: "${RUN_NOIR:=1}"                 # set to 0 to disable
+: "${NOIR_BIN:=python3 -u /app/noir.py}"
+
+# ─────────── ROS env ───────────
 source /opt/ros/noetic/setup.bash
-source /catkin_ws/devel/setup.bash
+[ -f /catkin_ws/devel/setup.bash ] && source /catkin_ws/devel/setup.bash
 
-echo "Starting ROS bridge with minimal roller_eye support..."
-echo "Available roller_eye messages:"
-rosmsg list | grep roller_eye
-echo "Available roller_eye services:"
-rossrv list | grep roller_eye
+echo "[entrypoint] ROS env ready"
+echo "[entrypoint] ROS_MASTER_URI  : ${ROS_MASTER_URI:-"(unset - roslaunch will start roscore)"}"
 
-sshpass -p "linaro" ssh linaro@10.42.0.1 'bash -lc "source /opt/ros/noetic/setup.bash && (rosnode kill /NavPathNode || true)"'
+echo "[entrypoint] Available roller_eye messages:" && (rosmsg list | grep -F "roller_eye" || true)
 
-roslaunch rosbridge_server rosbridge_websocket.launch
+# ─────────── Best-effort remote kill ───────────
+if command -v sshpass >/dev/null 2>&1; then
+  sshpass -p "${REMOTE_PASS}" \
+    ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+        -o ConnectTimeout=3 -o BatchMode=no -o ConnectionAttempts=1 \
+        "${REMOTE_USER}@${REMOTE_HOST}" \
+        'bash -lc "source /opt/ros/noetic/setup.bash || true; (rosnode kill '"${REMOTE_NODE}"' || true)"' \
+    || echo "[entrypoint] Remote kill failed/skipped."
+fi
+
+# ─────────── Signal handling ───────────
+pids=()
+cleanup() {
+  echo "[entrypoint] stopping children..."
+  for pid in "${pids[@]:-}"; do
+    kill -TERM "$pid" 2>/dev/null || true
+  done
+  for pid in "${pids[@]:-}"; do
+    wait "$pid" 2>/dev/null || true
+  done
+}
+trap cleanup SIGTERM SIGINT
+
+# ─────────── Start rosbridge ───────────
+echo "[entrypoint] rosbridge_websocket @ ${ROSBRIDGE_ADDRESS}:${ROSBRIDGE_PORT}"
+roslaunch rosbridge_server rosbridge_websocket.launch \
+  address:="${ROSBRIDGE_ADDRESS}" port:="${ROSBRIDGE_PORT}" &
+pids+=($!)
+echo "[entrypoint] rosbridge pid=${pids[-1]}"
+
+# ─────────── Start FastAPI ───────────
+echo "[entrypoint] FastAPI @ ${API_HOST}:${PORT}"
+python3 -m uvicorn bridge-api:app --host "${API_HOST}" --port "${PORT}" \
+  --workers "${API_WORKERS}" --log-level "${API_LOG_LEVEL}" &
+pids+=($!)
+echo "[entrypoint] uvicorn pid=${pids[-1]}"
+
+# ─────────── Start Noir controller (optional) ───────────
+if [ "${RUN_NOIR}" = "1" ]; then
+  echo "[entrypoint] Noir/Xbox loop starting..."
+  bash -lc "${NOIR_BIN}" &
+  pids+=($!)
+  echo "[entrypoint] noir pid=${pids[-1]}"
+else
+  echo "[entrypoint] RUN_NOIR=0; skipping noir controller."
+fi
+
+# ─────────── Wait for any to exit ───────────
+set +e
+wait -n "${pids[@]}"
+code=$?
+cleanup
+echo "[entrypoint] exiting with code ${code}"
+exit "${code}"
