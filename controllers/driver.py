@@ -176,19 +176,13 @@ class Session:
             self._set_light(*_C_IDLE)
 
     def read(self):
-        """Return analog (LY, LX, RX, LT, RT), d-pad (DU, DD, DL, DR), shoulders (LB, RB)."""
+        """Return (LY, RX, LT, RT, LB, RB). Left Y = fwd, right X = strafe, L1/R1 = rotate."""
         gp = self.gp
-        dp = gp.dpad()
         return (
             _dz(_clamp(gp.leftThumbstick().yAxis().value())),
-            _dz(_clamp(gp.leftThumbstick().xAxis().value())),
             _dz(_clamp(gp.rightThumbstick().xAxis().value())),
             _clamp(gp.leftTrigger().value(),  0.0, 1.0),
             _clamp(gp.rightTrigger().value(), 0.0, 1.0),
-            bool(dp.up().isPressed()),
-            bool(dp.down().isPressed()),
-            bool(dp.left().isPressed()),
-            bool(dp.right().isPressed()),
             bool(gp.leftShoulder().isPressed()),
             bool(gp.rightShoulder().isPressed()),
         )
@@ -322,7 +316,7 @@ def main():
                 continue
 
             # ── Inputs ───────────────────────────────────────────────────────
-            LY, LX, RX, LT, RT, DU, DD, DL, DR, LB, RB = session.read()
+            LY, RX, LT, RT, LB, RB = session.read()
 
             lt = LT > TRIG_PRESS
             rt = RT > TRIG_PRESS
@@ -341,11 +335,9 @@ def main():
             else:
                 fwdmax, rotmax = SPEED["base"]
 
-            # Each input source is independent — values sum then clamp.
-            # D-pad and shoulders give full digital speed; sticks give analog.
-            fwd    = _clamp(LY * fwdmax + (DU - DD) * fwdmax, -fwdmax, fwdmax)
-            strafe = _clamp(LX * fwdmax + (DR - DL) * fwdmax, -fwdmax, fwdmax)
-            rotate = _clamp(RX * rotmax + (RB - LB) * rotmax, -rotmax, rotmax)
+            fwd    = LY * fwdmax
+            strafe = RX * fwdmax
+            rotate = (RB - LB) * rotmax
 
             moving = abs(fwd) > 1e-3 or abs(strafe) > 1e-3 or abs(rotate) > 1e-3
 
