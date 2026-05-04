@@ -520,15 +520,39 @@
         </div>
         <div class="sensor-cell">
           <div class="s-lbl">BATTERY</div>
-          <div class="s-val" id="s-bat">--<span class="s-unit">%</span></div>
+          <div class="s-val" id="s-bat">--<span class="s-unit">%</span> <span class="s-unit" id="s-chg"></span></div>
+        </div>
+        <div class="sensor-cell">
+          <div class="s-lbl">ACCEL X</div>
+          <div class="s-val" id="s-ax">--<span class="s-unit">m/s²</span></div>
+        </div>
+        <div class="sensor-cell">
+          <div class="s-lbl">ACCEL Y</div>
+          <div class="s-val" id="s-ay">--<span class="s-unit">m/s²</span></div>
         </div>
         <div class="sensor-cell">
           <div class="s-lbl">ACCEL Z</div>
           <div class="s-val" id="s-az">--<span class="s-unit">m/s²</span></div>
         </div>
         <div class="sensor-cell">
-          <div class="s-lbl">CHARGING</div>
-          <div class="s-val" id="s-chg" style="font-size:16px">--</div>
+          <div class="s-lbl">GYRO Z</div>
+          <div class="s-val" id="s-gz">--<span class="s-unit">rad/s</span></div>
+        </div>
+        <div class="sensor-cell">
+          <div class="s-lbl">POS X</div>
+          <div class="s-val" id="s-vx">--<span class="s-unit">m</span></div>
+        </div>
+        <div class="sensor-cell">
+          <div class="s-lbl">POS Y</div>
+          <div class="s-val" id="s-vy">--<span class="s-unit">m</span></div>
+        </div>
+        <div class="sensor-cell">
+          <div class="s-lbl">SPEED</div>
+          <div class="s-val" id="s-spd">--<span class="s-unit">m/s</span></div>
+        </div>
+        <div class="sensor-cell">
+          <div class="s-lbl">YAW RATE</div>
+          <div class="s-val" id="s-yr">--<span class="s-unit">rad/s</span></div>
         </div>
       </div>
     </div>
@@ -666,33 +690,51 @@ async function pollStatus() {
 }
 
 // ── Sensors ──────────────────────────────────────────────────────────────────
+function _sv(val, decimals, unit) {
+  return val != null
+    ? `${val.toFixed(decimals)}<span class="s-unit">${unit}</span>`
+    : `--<span class="s-unit">${unit}</span>`;
+}
+
 async function pollSensors() {
   const d = await apiFetch('/sensors');
   if (!d) return;
 
-  const tof = d.tof_range_m;
-  document.getElementById('s-range').innerHTML =
-    tof != null ? `${tof.toFixed(2)}<span class="s-unit">m</span>` : `--<span class="s-unit">m</span>`;
+  // ToF range
+  document.getElementById('s-range').innerHTML = _sv(d.tof_range_m, 2, 'm');
 
+  // Battery
   const bat = d.battery?.percentage;
   const batEl = document.getElementById('s-bat');
   if (bat != null) {
     const pct = Math.round(bat);
     const [c, g] = pct > 50 ? ['var(--accent)', 'var(--glow-green)'] : pct > 20 ? ['var(--amber)', '0 0 8px rgba(255,179,71,.5)'] : ['var(--red)', 'var(--glow-red)'];
-    batEl.innerHTML = `<span style="color:${c};text-shadow:${g}">${pct}</span><span class="s-unit">%</span>`;
+    const chg = d.battery?.charging;
+    const chgTag = chg ? `<span style="color:var(--accent);font-size:10px">⚡</span>` : d.battery?.full ? `<span style="color:var(--accent);font-size:10px">FULL</span>` : '';
+    batEl.innerHTML = `<span style="color:${c};text-shadow:${g}">${pct}</span><span class="s-unit">% ${chgTag}</span>`;
   } else {
     batEl.innerHTML = `--<span class="s-unit">%</span>`;
   }
 
-  const az = d.imu?.linear_acceleration?.z;
-  document.getElementById('s-az').innerHTML =
-    az != null ? `${az.toFixed(1)}<span class="s-unit">m/s²</span>` : `--<span class="s-unit">m/s²</span>`;
+  // IMU — linear acceleration (all 3 axes)
+  const la = d.imu?.linear_acceleration;
+  document.getElementById('s-ax').innerHTML = _sv(la?.x, 2, 'm/s²');
+  document.getElementById('s-ay').innerHTML = _sv(la?.y, 2, 'm/s²');
+  document.getElementById('s-az').innerHTML = _sv(la?.z, 2, 'm/s²');
 
-  const chg = d.battery?.charging;
-  document.getElementById('s-chg').innerHTML =
-    chg == null ? `--` : chg
-      ? `<span style="color:var(--accent);text-shadow:var(--glow-green)">YES</span>`
-      : `<span style="color:var(--fg-dim)">NO</span>`;
+  // IMU — gyro Z (yaw rate)
+  document.getElementById('s-gz').innerHTML = _sv(d.imu?.angular_velocity?.z, 3, 'rad/s');
+
+  // VIO odometry — position
+  const pos = d.vio_odom?.position;
+  document.getElementById('s-vx').innerHTML = _sv(pos?.x, 3, 'm');
+  document.getElementById('s-vy').innerHTML = _sv(pos?.y, 3, 'm');
+
+  // VIO odometry — speed magnitude + yaw rate
+  const vl = d.vio_odom?.velocity?.linear;
+  const spd = (vl?.x != null && vl?.y != null) ? Math.sqrt(vl.x**2 + vl.y**2) : null;
+  document.getElementById('s-spd').innerHTML = _sv(spd, 3, 'm/s');
+  document.getElementById('s-yr').innerHTML  = _sv(d.vio_odom?.velocity?.angular?.z, 3, 'rad/s');
 }
 
 // ── Detections ───────────────────────────────────────────────────────────────
@@ -710,9 +752,9 @@ async function pollDetections() {
     return;
   }
 
-  const sorted = [...dets].sort((a, b) => b.confidence - a.confidence).slice(0, 6);
+  const sorted = [...dets].sort((a, b) => (b.conf ?? b.confidence ?? 0) - (a.conf ?? a.confidence ?? 0)).slice(0, 6);
   body.innerHTML = sorted.map(det => {
-    const pct  = Math.round((det.confidence || 0) * 100);
+    const pct  = Math.round(((det.conf ?? det.confidence) || 0) * 100);
     const name = (det.label || det.name || '?').toUpperCase();
     return `<div class="det-row">
       <span class="det-name">${name}</span>
