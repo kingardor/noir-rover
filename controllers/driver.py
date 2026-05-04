@@ -77,17 +77,34 @@ def _make_engine(ctrl):
     ok, _ = e.startAndReturnError_(None)
     return e if ok else None
 
-def _buzz(engine, intensity):
+def _make_transient(t, intensity, sharpness):
+    pi = CH.CHHapticEventParameter.alloc().initWithParameterID_value_(
+        CH.CHHapticEventParameterIDHapticIntensity, float(intensity))
+    sh = CH.CHHapticEventParameter.alloc().initWithParameterID_value_(
+        CH.CHHapticEventParameterIDHapticSharpness, float(sharpness))
+    return CH.CHHapticEvent.alloc().initWithEventType_parameters_relativeTime_(
+        CH.CHHapticEventTypeHapticTransient, [pi, sh], float(t))
+
+
+# (time_s, intensity 0-1, sharpness 0=soft 1=sharp)
+_HAPTIC_PRECISION = [
+    (0.00, 0.40, 0.05),   # soft thud
+    (0.14, 0.65, 0.05),   # slightly firmer thud
+]
+_HAPTIC_BOOST = [
+    (0.00, 0.45, 0.85),   # crisp punch
+    (0.08, 0.72, 0.88),   # stronger
+    (0.16, 1.00, 0.92),   # full power crack
+]
+
+
+def _buzz(engine, style: str):
     if engine is None:
         return
+    specs = _HAPTIC_PRECISION if style == "precision" else _HAPTIC_BOOST
     try:
-        pi = CH.CHHapticEventParameter.alloc().initWithParameterID_value_(
-            CH.CHHapticEventParameterIDHapticIntensity, intensity)
-        sh = CH.CHHapticEventParameter.alloc().initWithParameterID_value_(
-            CH.CHHapticEventParameterIDHapticSharpness, 0.5)
-        ev = CH.CHHapticEvent.alloc().initWithEventType_parameters_relativeTime_(
-            CH.CHHapticEventTypeHapticTransient, [pi, sh], 0.0)
-        pat, _ = CH.CHHapticPattern.alloc().initWithEvents_parameters_error_([ev], [], None)
+        events = [_make_transient(*s) for s in specs]
+        pat, _ = CH.CHHapticPattern.alloc().initWithEvents_parameters_error_(events, [], None)
         if pat is None:
             return
         player, _ = engine.createPlayerWithPattern_error_(pat, None)
@@ -170,8 +187,8 @@ class Session:
             bool(gp.rightShoulder().isPressed()),
         )
 
-    def buzz(self, intensity):
-        _buzz(self.engine, intensity)
+    def buzz(self, style: str):
+        _buzz(self.engine, style)
 
     def teardown(self):
         if self.ps5:
@@ -305,9 +322,9 @@ def main():
             rt = RT > TRIG_PRESS
 
             if lt and not prev_lt:
-                session.buzz(0.3)
+                session.buzz("precision")
             if rt and not prev_rt:
-                session.buzz(0.9)
+                session.buzz("boost")
             prev_lt, prev_rt = lt, rt
 
             # ── Velocity ─────────────────────────────────────────────────────
