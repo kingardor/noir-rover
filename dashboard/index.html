@@ -109,9 +109,6 @@
     .pill.warn { color: var(--amber);   border-color: var(--amber);   box-shadow: 0 0 6px rgba(255,179,71,.12); }
     .pill.info { color: var(--cyan);    border-color: var(--cyan);    box-shadow: 0 0 6px rgba(0,212,255,.12); }
 
-    .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
-    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.2} }
-    .dot.live { animation: blink 2s ease-in-out infinite; }
 
     .hdr-spacer { flex: 1; }
 
@@ -448,7 +445,7 @@
   <div class="hdr-pills">
     <!-- ROS connection -->
     <div class="pill" id="p-ros">
-      <span class="dot" id="dot-ros"></span>
+      <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/></svg>
       <span id="t-ros">ROS</span>
     </div>
     <!-- Camera -->
@@ -653,14 +650,12 @@ async function pollStatus() {
   const d = await apiFetch('/status');
   if (!d) {
     setPill('p-ros', 'err', 'OFFLINE');
-    document.getElementById('dot-ros').className = 'dot';
     setPill('p-cam', 'err', 'OFFLINE');
     return;
   }
 
   const rosOk = d.ros_connected;
   setPill('p-ros', rosOk ? 'ok' : 'err', rosOk ? 'CONNECTED' : 'NO ROS');
-  document.getElementById('dot-ros').className = `dot ${rosOk ? 'live' : ''}`;
 
   const camOk = d.camera_active;
   setPill('p-cam', camOk ? 'info' : 'warn', camOk ? 'LIVE' : 'NO SIGNAL');
