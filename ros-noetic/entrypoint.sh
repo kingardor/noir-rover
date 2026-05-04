@@ -16,9 +16,8 @@ set -Eeuo pipefail
 : "${API_WORKERS:=1}"
 : "${API_LOG_LEVEL:=info}"
 
-# Noir/Xbox loop
-: "${RUN_NOIR:=1}"                 # set to 0 to disable
-: "${NOIR_BIN:=python3 -u /app/noir.py}"
+# Rosbridge WebSocket
+: "${RUN_ROSBRIDGE:=1}"            # set to 0 to disable (not needed for HTTP agent mode)
 
 # ─────────── ROS env ───────────
 source /opt/ros/noetic/setup.bash
@@ -52,12 +51,16 @@ cleanup() {
 }
 trap cleanup SIGTERM SIGINT
 
-# ─────────── Start rosbridge ───────────
-echo "[entrypoint] rosbridge_websocket @ ${ROSBRIDGE_ADDRESS}:${ROSBRIDGE_PORT}"
-roslaunch rosbridge_server rosbridge_websocket.launch \
-  address:="${ROSBRIDGE_ADDRESS}" port:="${ROSBRIDGE_PORT}" &
-pids+=($!)
-echo "[entrypoint] rosbridge pid=${pids[-1]}"
+# ─────────── Start rosbridge (optional) ───────────
+if [ "${RUN_ROSBRIDGE}" = "1" ]; then
+  echo "[entrypoint] rosbridge_websocket @ ${ROSBRIDGE_ADDRESS}:${ROSBRIDGE_PORT}"
+  roslaunch rosbridge_server rosbridge_websocket.launch \
+    address:="${ROSBRIDGE_ADDRESS}" port:="${ROSBRIDGE_PORT}" &
+  pids+=($!)
+  echo "[entrypoint] rosbridge pid=${pids[-1]}"
+else
+  echo "[entrypoint] RUN_ROSBRIDGE=0; skipping rosbridge."
+fi
 
 # ─────────── Start FastAPI ───────────
 echo "[entrypoint] FastAPI @ ${API_HOST}:${PORT}"
@@ -65,16 +68,6 @@ python3 -m uvicorn bridge-api:app --host "${API_HOST}" --port "${PORT}" \
   --workers "${API_WORKERS}" --log-level "${API_LOG_LEVEL}" &
 pids+=($!)
 echo "[entrypoint] uvicorn pid=${pids[-1]}"
-
-# ─────────── Start Noir controller (optional) ───────────
-if [ "${RUN_NOIR}" = "1" ]; then
-  echo "[entrypoint] Noir/Xbox loop starting..."
-  bash -lc "${NOIR_BIN}" &
-  pids+=($!)
-  echo "[entrypoint] noir pid=${pids[-1]}"
-else
-  echo "[entrypoint] RUN_NOIR=0; skipping noir controller."
-fi
 
 # ─────────── Wait for any to exit ───────────
 set +e

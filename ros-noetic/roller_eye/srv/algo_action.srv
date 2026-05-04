@@ -1,0 +1,6 @@
+float32 xSpeed
+float32 ySpeed
+float32 rotatedSpeed
+int32 time
+---
+int32 ret

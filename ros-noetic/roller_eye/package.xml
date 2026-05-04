@@ -2,7 +2,7 @@
 <package format="2">
   <name>roller_eye</name>
   <version>1.0.0</version>
-  <description>Minimal Moorebot Scout message and service definitions</description>
+  <description>Moorebot Scout message and service definitions</description>
   <maintainer email="akash.james2096@gmail.com">Developer</maintainer>
   <license>MIT</license>
   

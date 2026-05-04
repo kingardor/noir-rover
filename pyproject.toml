@@ -1,0 +1,46 @@
+[project]
+name = "noir-rover"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "redis>=5.0",
+    "requests>=2.31",
+    "numpy>=1.26",
+    "pyobjc-core>=12.1",
+    "pyobjc-framework-GameController>=12.1",
+    "pyobjc-framework-CoreHaptics>=12.1",
+]
+
+[dependency-groups]
+vision = [
+    "ultralytics>=8.1",
+    "supervision>=0.18",
+    "opencv-python-headless>=4.8",
+    "Pillow>=10.0",
+    "torch>=2.2",
+    "clip @ git+https://github.com/openai/CLIP.git",
+    "ftfy>=6.0",
+]
+agent = [
+    "openai>=1.12",
+    "opencv-python-headless>=4.8",
+    "PyYAML>=6.0",
+]
+audio = [
+    "sounddevice>=0.4.6",
+    "mlx-whisper>=0.3",
+    "pynput>=1.7",
+]
+mcp-server = [
+    "mcp>=1.0",
+    "openai>=1.12",
+    "opencv-python-headless>=4.8",
+    "PyYAML>=6.0",
+]
+# Install everything: uv sync --all-groups
+all = [
+    { include-group = "vision" },
+    { include-group = "agent" },
+    { include-group = "audio" },
+    { include-group = "mcp-server" },
+]

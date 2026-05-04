@@ -6,7 +6,6 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       build-essential \
       cmake \
-      libevdev2 \
       openssh-client \
       python3-dev \
       python3-pip \
@@ -16,19 +15,17 @@ RUN apt-get update && \
       sshpass \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip3 install --no-cache-dir --no-build-isolation \
-    evdev==1.6.1 \
+RUN pip3 install --no-cache-dir \
     fastapi==0.70.0 \
     uvicorn==0.16.0 \
     "pydantic<2" \
     roslibpy \
     requests \
-    cryptography==3.3.2 \
-    pyOpenSSL==20.0.1 \
+    cryptography \
+    pyOpenSSL \
     pillow \
     opencv-python-headless \
     numpy \
-    gradio \
     redis
 
 # Catkin workspace
@@ -40,9 +37,8 @@ RUN bash -lc "source /opt/ros/noetic/setup.bash && catkin_make"
 
 WORKDIR /app
 COPY scoutros.py /app/scoutros.py
-COPY xbox.py /app/xbox.py
+COPY relay_protocol.py /app/relay_protocol.py
 COPY bridge-api.py /app/bridge-api.py
-COPY noir.py /app/noir.py
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 

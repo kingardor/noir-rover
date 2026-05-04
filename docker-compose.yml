@@ -6,73 +6,35 @@ services:
     environment:
       - ALLOW_EMPTY_PASSWORD=yes
     network_mode: "host"
-  
+
   noir-ros-noetic:
     build: ros-noetic
     network_mode: "host"
     environment:
       - ROS_MASTER_URI=http://10.42.0.1:11311
-      - ROS_IP=10.42.0.160
-      - CONTROLLER_DEVICE=/dev/input/event20
-      - NOIR_SEND_HZ=60
-    devices:
-      - /dev/input/event20:/dev/input/event20
-    volumes:
-      - /dev/input:/dev/input:ro
+      - ROS_IP=10.42.0.181
+      - RUN_ROSBRIDGE=0
     stdin_open: true
     tty: true
     extra_hosts:
       - linaro-alip:10.42.0.1
 
-  # noir-ai:
-  #   build: ai
-  #   network_mode: "host"
-  #   volumes:
-  #     - /var/run/docker.sock:/var/run/docker.sock
-  #     - /usr/bin/docker:/usr/bin/docker
-  #     - /tmp/.X11-unix:/tmp/.X11-unix:ro
-  #   security_opt:
-  #     - seccomp:unconfined
-  #   environment:
-  #     DISPLAY: $DISPLAY
-  #   deploy:
-  #     resources:
-  #       reservations:
-  #         devices:
-  #           - driver: nvidia
-  #             count: 1
-  #             capabilities: [gpu]
-  #       limits:
-  #         memory: 2G
-    
-  # noir-asr:
-  #   devices:
-  #   - /dev/snd:/dev/snd
-  #   build:
-  #     context: asr
-  #   group_add:
-  #     - 29
-  #   volumes:
-  #     - /var/run/docker.sock:/var/run/docker.sock
-  #     - /usr/bin/docker:/usr/bin/docker
-  #     - /tmp/.X11-unix/:/tmp/.X11-unix
-  #     - ${XDG_RUNTIME_DIR}/pulse/native:${XDG_RUNTIME_DIR}/pulse/native
-  #     - ~/.config/pulse/cookie:/root/.config/pulse/cookie
-  #   security_opt:
-  #     - seccomp:unconfined
-  #   environment:
-  #     LOG_LEVEL: 'debug'
-  #     PULSE_SERVER: unix:${XDG_RUNTIME_DIR}/pulse/native
-  #   restart: always
-  #   network_mode: "host"
-  #   deploy:
-  #     resources:
-  #       reservations:
-  #         devices:
-  #           - driver: nvidia
-  #             count: 1
-  #             capabilities: [gpu]
-  #       limits:
-  #         memory: 2G
-  #   depends_on:
-  #     - noir-redis
+  # Socat proxies — expose host-mode services to Mac's localhost.
+  # Bridge containers reach host-mode services via Docker VM's eth0 (192.168.65.3).
+  noir-api-proxy:
+    image: alpine/socat:latest
+    restart: always
+    ports:
+      - "8012:8012"   # Mac native services use localhost:8012
+    command: TCP-LISTEN:8012,fork,reuseaddr,bind=0.0.0.0 TCP:192.168.65.3:8011
+    depends_on:
+      - noir-ros-noetic
+
+  noir-redis-proxy:
+    image: alpine/socat:latest
+    restart: always
+    ports:
+      - "6380:6380"   # Mac native services use localhost:6380
+    command: TCP-LISTEN:6380,fork,reuseaddr,bind=0.0.0.0 TCP:192.168.65.3:6379
+    depends_on:
+      - noir-redis

@@ -1,0 +1,3 @@
+---
+int8 isNight
+int32 brightness
