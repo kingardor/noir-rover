@@ -39,7 +39,7 @@ REDIS_URL   = os.getenv("REDIS_URL",  "redis://localhost:6380")
 POLL_HZ     = 60
 DEADZONE    = 0.08
 TRIG_PRESS  = 0.50
-DURATION_MS = 100   # velocity hold per send; robot auto-stops if sends cease
+DURATION_MS = 400   # velocity hold per send; covers HTTP RTT spikes; robot auto-stops if sends cease
 
 SPEED = {
     "base":      (0.25,  4.0),
