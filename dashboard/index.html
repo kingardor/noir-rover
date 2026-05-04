@@ -201,12 +201,28 @@
       min-height: 0;
     }
 
-    #cam-img {
+    #cam-canvas {
       width: 100%;
       height: 100%;
       object-fit: contain;
       display: block;
     }
+
+    .overlay-toggle {
+      margin-left: auto;
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      color: var(--fg-dim);
+      font-family: var(--font-hd);
+      font-size: 8px;
+      letter-spacing: .12em;
+      padding: 2px 6px;
+      cursor: pointer;
+      transition: color 150ms, border-color 150ms;
+    }
+    .overlay-toggle.on  { color: var(--cyan); border-color: var(--cyan); }
+    .overlay-toggle.off { color: var(--fg-dim); border-color: var(--border); }
 
     /* HUD corner brackets */
     .hud { position: absolute; inset: 0; pointer-events: none; }
@@ -475,9 +491,10 @@
       <div class="card-hdr">
         OPTICS <span class="hl">// FEED</span>
         <span class="badge" id="b-age">-- ms</span>
+        <button class="overlay-toggle on" id="overlay-btn" onclick="toggleOverlay()" title="Toggle detection overlay">OVERLAY</button>
       </div>
       <div class="cam-body" id="cam-body">
-        <img id="cam-img" alt="Robot camera feed" style="display:none">
+        <canvas id="cam-canvas" style="display:none"></canvas>
         <div class="cam-nosig" id="cam-nosig">
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M16 16v1a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2m5.66 0H14a2 2 0 0 1 2 2v3.34l1 1L23 7v10"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
           <span>NO SIGNAL</span>
@@ -631,16 +648,82 @@
 // ── Config ──────────────────────────────────────────────────────────────────
 const API = 'http://localhost:8012';
 
-// ── Camera MJPEG stream ──────────────────────────────────────────────────────
-const camImg   = document.getElementById('cam-img');
-const camNosig = document.getElementById('cam-nosig');
+// ── Camera feed (snapshot polling → canvas) ──────────────────────────────────
+const camCanvas = document.getElementById('cam-canvas');
+const camNosig  = document.getElementById('cam-nosig');
+const camCtx    = camCanvas.getContext('2d');
+let _overlayOn  = true;
+let _lastDetData = { detections: [], frame_w: 640, frame_h: 384 };
 
-function initCamera() {
-  camImg.src = `${API}/camera/stream`;
-  camImg.onload = () => { camImg.style.display = ''; camNosig.style.display = 'none'; };
-  camImg.onerror = () => { camImg.style.display = 'none'; camNosig.style.display = ''; setTimeout(initCamera, 3000); };
+function toggleOverlay() {
+  _overlayOn = !_overlayOn;
+  const btn = document.getElementById('overlay-btn');
+  btn.textContent = _overlayOn ? 'OVERLAY' : 'OVERLAY OFF';
+  btn.className = `overlay-toggle ${_overlayOn ? 'on' : 'off'}`;
 }
-initCamera();
+
+function _drawCorners(ctx, x, y, w, h) {
+  const d = Math.min(12, w * 0.18, h * 0.18);
+  ctx.beginPath();
+  ctx.moveTo(x+d,y);   ctx.lineTo(x,y);   ctx.lineTo(x,y+d);
+  ctx.moveTo(x+w-d,y); ctx.lineTo(x+w,y); ctx.lineTo(x+w,y+d);
+  ctx.moveTo(x,y+h-d); ctx.lineTo(x,y+h); ctx.lineTo(x+d,y+h);
+  ctx.moveTo(x+w-d,y+h); ctx.lineTo(x+w,y+h); ctx.lineTo(x+w,y+h-d);
+  ctx.stroke();
+}
+
+function drawOverlay(cw, ch) {
+  const { detections, frame_w, frame_h } = _lastDetData;
+  if (!detections.length) return;
+  const sx = cw / frame_w, sy = ch / frame_h;
+  camCtx.font = 'bold 11px "JetBrains Mono", monospace';
+
+  for (const det of detections.slice(0, 8)) {
+    const [x1, y1, x2, y2] = det.bbox;
+    const bx = x1*sx, by = y1*sy, bw = (x2-x1)*sx, bh = (y2-y1)*sy;
+    const pct   = Math.round(((det.conf ?? det.confidence) || 0) * 100);
+    const label = `${(det.label || '?').toUpperCase()} ${pct}%`;
+
+    // Corner brackets
+    camCtx.strokeStyle = 'rgba(0,212,255,0.85)';
+    camCtx.lineWidth = 1.8;
+    _drawCorners(camCtx, bx, by, bw, bh);
+
+    // Subtle fill
+    camCtx.fillStyle = 'rgba(0,212,255,0.04)';
+    camCtx.fillRect(bx, by, bw, bh);
+
+    // Label pill
+    const tw = camCtx.measureText(label).width;
+    const lx = bx, ly = by > 18 ? by - 18 : by + bh;
+    camCtx.fillStyle = 'rgba(0,0,0,0.78)';
+    camCtx.fillRect(lx, ly, tw + 10, 17);
+    camCtx.fillStyle = 'rgba(0,212,255,0.95)';
+    camCtx.fillText(label, lx + 5, ly + 12);
+  }
+}
+
+async function feedLoop() {
+  try {
+    const res = await fetch(`${API}/camera/frame`, { signal: AbortSignal.timeout(1500) });
+    if (!res.ok) throw new Error();
+    const url = URL.createObjectURL(await res.blob());
+    const img = new Image();
+    img.onload = () => {
+      camCanvas.width  = img.naturalWidth;
+      camCanvas.height = img.naturalHeight;
+      camCtx.drawImage(img, 0, 0);
+      if (_overlayOn) drawOverlay(img.naturalWidth, img.naturalHeight);
+      URL.revokeObjectURL(url);
+      camCanvas.style.display = '';
+      camNosig.style.display  = 'none';
+    };
+    img.onerror = () => URL.revokeObjectURL(url);
+    img.src = url;
+  } catch { /* leave nosig visible */ }
+  setTimeout(feedLoop, 100);
+}
+feedLoop();
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 async function apiFetch(path) {
@@ -743,6 +826,13 @@ async function pollDetections() {
   const body  = document.getElementById('det-body');
   const badge = document.getElementById('b-dets');
   const dets  = d?.detections || [];
+
+  // Share with canvas overlay
+  _lastDetData = {
+    detections: dets,
+    frame_w: d?.frame_w ?? 640,
+    frame_h: d?.frame_h ?? 384,
+  };
 
   badge.textContent = `${dets.length} object${dets.length !== 1 ? 's' : ''}`;
   badge.className   = `badge ${dets.length ? 'ok' : ''}`;
