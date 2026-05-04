@@ -1,4 +1,4 @@
-.PHONY: dev logs stop e2e sync voice patrol follow dashboard keyboard ps5-test controller
+.PHONY: dev logs stop e2e sync voice patrol follow dashboard keyboard ps5-test controller vlm facerec
 
 # Fallback: plain bash (no Tilt UI) — prefer: tilt up
 dev:
@@ -9,10 +9,12 @@ logs:
 
 stop:
 	docker compose down
-	pkill -f "vision/app.py" 2>/dev/null || true
-	pkill -f "audio/tts.py"  2>/dev/null || true
-	pkill -f "audio/stt.py"  2>/dev/null || true
-	pkill -f "mcp/main.py"   2>/dev/null || true
+	pkill -f "vision/app.py"    2>/dev/null || true
+	pkill -f "vision/vlm.py"    2>/dev/null || true
+	pkill -f "vision/facerec.py" 2>/dev/null || true
+	pkill -f "audio/tts.py"     2>/dev/null || true
+	pkill -f "audio/stt.py"     2>/dev/null || true
+	pkill -f "mcp/main.py"      2>/dev/null || true
 
 e2e:
 	bash scripts/e_stop_test.sh
@@ -48,6 +50,14 @@ controller:
 # Test PS5 DualSense controller (buttons, axes, rumble, lightbar)
 ps5-test:
 	uv run python scripts/ps5_test.py
+
+vlm:
+	BRIDGE_URL=http://localhost:8012 REDIS_URL=redis://localhost:6380 \
+	  uv run python -u vision/vlm.py
+
+facerec:
+	REDIS_URL=redis://localhost:6380 \
+	  uv run python -u vision/facerec.py
 
 # Keyboard teleoperation — sends UDP directly to relay on robot
 keyboard:

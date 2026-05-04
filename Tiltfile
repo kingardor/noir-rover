@@ -34,12 +34,36 @@ local_resource(
 # through to containers. YOLOE on CPU is ~10x slower; mlx-whisper is Apple-only.
 # Agent, TTS, and MCP share the same venv and are simpler to manage alongside them.
 
+# Ollama is managed by the macOS menu-bar app — do not call 'ollama serve'.
+# This gate simply waits until the already-running Ollama is reachable.
+local_resource(
+    'ollama-ready',
+    cmd='bash -c "until curl -sf http://localhost:11434/api/version > /dev/null 2>&1; do sleep 1; done"',
+    labels=['native'],
+)
+
 local_resource(
     'vision',
     serve_cmd='BRIDGE_URL=http://localhost:8012 REDIS_URL=redis://localhost:6380 uv run python -u vision/app.py',
-    deps=['vision/'],
+    deps=['vision/app.py', 'vision/memory.py', 'vision/depth.py'],
     labels=['native'],
     resource_deps=['bridge-ready'],
+)
+
+local_resource(
+    'vlm',
+    serve_cmd='BRIDGE_URL=http://localhost:8012 REDIS_URL=redis://localhost:6380 uv run python -u vision/vlm.py',
+    deps=['vision/vlm.py'],
+    labels=['native'],
+    resource_deps=['bridge-ready', 'vision', 'ollama-ready'],
+)
+
+local_resource(
+    'facerec',
+    serve_cmd='REDIS_URL=redis://localhost:6380 uv run python -u vision/facerec.py',
+    deps=['vision/facerec.py', 'faces/'],
+    labels=['native'],
+    resource_deps=['bridge-ready', 'vision'],
 )
 
 local_resource(
@@ -64,7 +88,7 @@ local_resource(
     serve_cmd='BRIDGE_URL=http://localhost:8012 REDIS_URL=redis://localhost:6380 uv run python -u -m agent.missions.voice',
     deps=['agent/missions/voice.py', 'agent/agent.py', 'agent/tools.py', 'agent/client.py'],
     labels=['native'],
-    resource_deps=['bridge-ready', 'vision'],
+    resource_deps=['bridge-ready', 'vision', 'ollama-ready'],
 )
 
 local_resource(

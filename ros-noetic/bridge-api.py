@@ -544,6 +544,32 @@ def stt_result():
         raise HTTPException(503, str(e))
 
 
+# ── VLM scene description ──────────────────────────────────────────────────────
+
+@app.get("/vlm/description")
+def vlm_description():
+    """Latest VLM scene description from vision/vlm.py (TTL 30s)."""
+    try:
+        raw = _redis().get("vlm:latest")
+        if not raw:
+            return {"text": "", "ts": 0, "frame_id": ""}
+        return json.loads(raw)
+    except redis_lib.RedisError as e:
+        raise HTTPException(503, str(e))
+
+
+@app.get("/faces/detections")
+def faces_detections():
+    """Latest face recognition results from vision/facerec.py (TTL 10s)."""
+    try:
+        raw = _redis().get("face:latest")
+        if not raw:
+            return {"faces": [], "ts": 0, "frame_id": ""}
+        return json.loads(raw)
+    except redis_lib.RedisError as e:
+        raise HTTPException(503, str(e))
+
+
 # ── Safety state ──────────────────────────────────────────────────────────────
 
 @app.get("/safety/state")

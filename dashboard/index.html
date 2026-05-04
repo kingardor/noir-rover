@@ -313,7 +313,7 @@
 
     /* Sensor grid */
     .sensor-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1px; background: var(--border); }
-    .sensor-cell { background: var(--card); padding: 5px 8px; }
+    .sensor-cell { background: var(--card); padding: 5px 8px; min-width: 0; }
 
     .s-lbl { font-family: var(--font-hd); font-size: 7px; font-weight: 700; letter-spacing: .14em; color: var(--fg-dim); margin-bottom: 2px; }
     .s-val { font-size: 13px; font-weight: 500; line-height: 1; color: var(--cyan); text-shadow: var(--glow-cyan); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -558,6 +558,24 @@
       </div>
     </div>
 
+    <!-- VLM scene description -->
+    <div class="card" id="vlm-card" style="flex-shrink:0;">
+      <div class="card-hdr" style="cursor:default;">
+        SCENE <span class="hl">// VLM</span>
+        <span class="badge" id="vlm-age">--</span>
+      </div>
+      <div id="vlm-text" style="padding:8px 12px;font-size:11px;color:var(--fg);line-height:1.5;min-height:28px;font-style:italic;">waiting for model…</div>
+    </div>
+
+    <!-- Face recognition -->
+    <div class="card" id="face-card" style="flex-shrink:0;">
+      <div class="card-hdr" style="cursor:default;">
+        FACES <span class="hl">// ID</span>
+        <span class="badge" id="b-faces">0</span>
+      </div>
+      <div id="face-body" style="padding:6px 12px;min-height:20px;font-size:11px;color:var(--fg-dim);">no faces detected</div>
+    </div>
+
   </div>
 
   <!-- ── Right column ────────────────────────────────────────────────────── -->
@@ -662,7 +680,7 @@
             onkeydown="if(event.key==='Enter')ttsSend()">
           <button class="tts-btn" onclick="ttsSend()">SPEAK</button>
         </div>
-        <div class="mic-status" id="stt-result" style="height:auto;min-height:12px;font-size:10px;color:var(--cyan);"></div>
+        <div id="stt-result" style="font-size:10px;color:var(--cyan);font-family:var(--font-bd);font-style:italic;min-height:12px;white-space:normal;overflow:visible;word-break:break-word;"></div>
       </div>
     </div>
 
@@ -720,7 +738,8 @@ const camCanvas = document.getElementById('cam-canvas');
 const camNosig  = document.getElementById('cam-nosig');
 const camCtx    = camCanvas.getContext('2d');
 let _overlayOn  = true;
-let _lastDetData = { detections: [], frame_w: 640, frame_h: 384 };
+let _lastDetData  = { detections: [], frame_w: 640, frame_h: 384 };
+let _lastFaceData = { faces: [], frame_w: 640, frame_h: 480 };
 
 function toggleOverlay() {
   _overlayOn = !_overlayOn;
@@ -740,33 +759,51 @@ function _drawCorners(ctx, x, y, w, h) {
 }
 
 function drawOverlay(cw, ch) {
-  const { detections, frame_w, frame_h } = _lastDetData;
-  if (!detections.length) return;
-  const sx = cw / frame_w, sy = ch / frame_h;
   camCtx.font = 'bold 11px "JetBrains Mono", monospace';
 
-  for (const det of detections.slice(0, 8)) {
-    const [x1, y1, x2, y2] = det.bbox;
-    const bx = x1*sx, by = y1*sy, bw = (x2-x1)*sx, bh = (y2-y1)*sy;
-    const pct   = Math.round(((det.conf ?? det.confidence) || 0) * 100);
-    const label = `${(det.label || '?').toUpperCase()} ${pct}%`;
+  // YOLOE detections — cyan
+  const { detections, frame_w, frame_h } = _lastDetData;
+  if (detections.length) {
+    const sx = cw / frame_w, sy = ch / frame_h;
+    for (const det of detections.slice(0, 8)) {
+      const [x1, y1, x2, y2] = det.bbox;
+      const bx = x1*sx, by = y1*sy, bw = (x2-x1)*sx, bh = (y2-y1)*sy;
+      const pct   = Math.round(((det.conf ?? det.confidence) || 0) * 100);
+      const label = `${(det.label || '?').toUpperCase()} ${pct}%`;
+      camCtx.strokeStyle = 'rgba(0,212,255,0.85)';
+      camCtx.lineWidth = 1.8;
+      _drawCorners(camCtx, bx, by, bw, bh);
+      camCtx.fillStyle = 'rgba(0,212,255,0.04)';
+      camCtx.fillRect(bx, by, bw, bh);
+      const tw = camCtx.measureText(label).width;
+      const lx = bx, ly = by > 18 ? by - 18 : by + bh;
+      camCtx.fillStyle = 'rgba(0,0,0,0.78)';
+      camCtx.fillRect(lx, ly, tw + 10, 17);
+      camCtx.fillStyle = 'rgba(0,212,255,0.95)';
+      camCtx.fillText(label, lx + 5, ly + 12);
+    }
+  }
 
-    // Corner brackets
-    camCtx.strokeStyle = 'rgba(0,212,255,0.85)';
-    camCtx.lineWidth = 1.8;
-    _drawCorners(camCtx, bx, by, bw, bh);
-
-    // Subtle fill
-    camCtx.fillStyle = 'rgba(0,212,255,0.04)';
-    camCtx.fillRect(bx, by, bw, bh);
-
-    // Label pill
-    const tw = camCtx.measureText(label).width;
-    const lx = bx, ly = by > 18 ? by - 18 : by + bh;
-    camCtx.fillStyle = 'rgba(0,0,0,0.78)';
-    camCtx.fillRect(lx, ly, tw + 10, 17);
-    camCtx.fillStyle = 'rgba(0,212,255,0.95)';
-    camCtx.fillText(label, lx + 5, ly + 12);
+  // Face recognition — magenta
+  const { faces, frame_w: fw, frame_h: fh } = _lastFaceData;
+  if (faces && faces.length) {
+    const sx = cw / fw, sy = ch / fh;
+    for (const face of faces) {
+      const [x1, y1, x2, y2] = face.bbox;
+      const bx = x1*sx, by = y1*sy, bw = (x2-x1)*sx, bh = (y2-y1)*sy;
+      const label = `${face.name} ${Math.round(face.score * 100)}%`;
+      camCtx.strokeStyle = 'rgba(204,0,255,0.9)';
+      camCtx.lineWidth = 1.8;
+      _drawCorners(camCtx, bx, by, bw, bh);
+      camCtx.fillStyle = 'rgba(204,0,255,0.05)';
+      camCtx.fillRect(bx, by, bw, bh);
+      const tw = camCtx.measureText(label).width;
+      const lx = bx, ly = by > 18 ? by - 18 : by + bh;
+      camCtx.fillStyle = 'rgba(0,0,0,0.78)';
+      camCtx.fillRect(lx, ly, tw + 10, 17);
+      camCtx.fillStyle = 'rgba(204,0,255,0.95)';
+      camCtx.fillText(label, lx + 5, ly + 12);
+    }
   }
 }
 
@@ -1110,6 +1147,44 @@ document.addEventListener('keyup', e => {
   }
 });
 
+// ── Face recognition ─────────────────────────────────────────────────────────
+async function pollFaces() {
+  const d = await apiFetch('/faces/detections');
+  const body = document.getElementById('face-body');
+  const badge = document.getElementById('b-faces');
+  if (!d) return;
+  const faces = d.faces || [];
+  badge.textContent = faces.length;
+  if (!faces.length) {
+    body.style.color = 'var(--fg-dim)';
+    body.textContent = 'no faces detected';
+  } else {
+    body.style.color = 'var(--fg)';
+    body.innerHTML = faces.map(f => {
+      const pct = Math.round(f.score * 100);
+      const col = pct >= 70 ? 'var(--accent)' : pct >= 45 ? 'var(--amber)' : 'var(--red)';
+      return `<span style="color:${col};margin-right:10px;">${f.name}</span><span style="color:var(--fg-dim);font-size:10px;">${pct}%</span>`;
+    }).join(' &nbsp;·&nbsp; ');
+  }
+  if (d.frame_w) {
+    _lastFaceData = { faces, frame_w: d.frame_w, frame_h: d.frame_h };
+  }
+}
+
+// ── VLM scene description ─────────────────────────────────────────────────────
+async function pollVLM() {
+  const d = await apiFetch('/vlm/description');
+  if (!d || !d.text) return;
+  const el = document.getElementById('vlm-text');
+  const age = document.getElementById('vlm-age');
+  el.textContent = d.text;
+  el.style.color = 'var(--fg)';
+  if (d.ts) {
+    const secs = Math.round(Date.now() / 1000 - d.ts);
+    age.textContent = secs < 60 ? `${secs}s ago` : `${Math.round(secs / 60)}m ago`;
+  }
+}
+
 // ── Poll loop ─────────────────────────────────────────────────────────────────
 function tick() {
   pollStatus();
@@ -1121,6 +1196,10 @@ function tick() {
 
 tick();
 setInterval(tick, 1000);
+setInterval(pollVLM, 4000);
+setInterval(pollFaces, 500);
+pollVLM();
+pollFaces();
 </script>
 </body>
 </html>

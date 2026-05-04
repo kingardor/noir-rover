@@ -82,6 +82,8 @@ MacBook Air M4 (native Python)          Docker VM (Linux containers)
 ### Native macOS (Python 3.11+)
 - **`vision/app.py`** — YOLOE on MPS. Publishes `vision:latest` JSON and `vision:thumb:{id}` to Redis. Runs `vision/memory.py` as thread.
 - **`vision/memory.py`** — Debounced detection writer to `memory:events` Redis stream.
+- **`vision/vlm.py`** — VLM scene description. Polls `vision:latest` every 4s, calls Ollama (`qwen2.5vl:3b`), stores result in `vlm:latest` (TTL 30s). Set `VLM_MODEL` env to override model.
+- **`vision/facerec.py`** — Face recognition using InsightFace (`buffalo_l`). Polls `vision:latest`, detects + identifies faces against enrolled images in `faces/`, publishes to `face:latest` (TTL 10s). Enrolled images: `faces/<Name>.jpg`. Threshold: 0.35 cosine similarity.
 - **`agent/agent.py`** — ReAct tool-use loop. Hard caps: 10 steps / 30s / `done()`.
 - **`agent/tools.py`** — All tool implementations (`look_around`, `detect`, `drive`, `stop`, `say`, `query_memory`, `done`). Also holds OpenAI tool schemas.
 - **`agent/client.py`** — `get_client()` → OpenAI-compatible client for Ollama (default) or LM Studio. Model: `qwen3.5:2b-q4_K_M`.
@@ -89,7 +91,7 @@ MacBook Air M4 (native Python)          Docker VM (Linux containers)
 - **`agent/missions/follow.py`** — Person follow-me PD controller (no LLM, vision events only).
 - **`agent/missions/patrol.py`** — Patrol with VLM diff anomaly detection.
 - **`audio/tts.py`** — Pops from `tts:queue` Redis list, speaks via `say` or Piper.
-- **`audio/stt.py`** — Push-to-talk (default: F13) → mlx-whisper → POST `/mission/start`.
+- **`audio/stt.py`** — Push-to-talk triggered from dashboard mic button via Redis pub/sub (`stt:control`). Records → mlx-whisper → POST `/mission/start`. Result stored in `stt:last_result`.
 - **`mcp/server.py`** — MCP server exposing all rover tools to Claude Desktop / Claude Code.
 
 ## Bridge API endpoints (port 8011 / proxied to 8012)
@@ -118,6 +120,11 @@ MacBook Air M4 (native Python)          Docker VM (Linux containers)
 | `POST /mission/stop` | Release mission lock |
 | `GET /mission/state` | Current mode + goal |
 | `POST /audio/speak` | Push text to `tts:queue` |
+| `POST /stt/start` | Signal stt.py to begin recording (via Redis pub/sub) |
+| `POST /stt/stop` | Signal stt.py to stop + transcribe |
+| `GET /stt/result` | Last Whisper transcription (TTL 5 min) |
+| `GET /vlm/description` | Latest VLM scene description (TTL 30s) |
+| `GET /faces/detections` | Latest face recognition results (TTL 10s) |
 | `GET /safety/state` | Full arbiter diagnostic |
 
 ## Safety arbiter
@@ -154,6 +161,10 @@ angular.z = rotation (+ = clockwise)
 | `memory:events` | Redis stream | — | `vision/memory.py` |
 | `patrol:baseline:{pose_id}` | string (caption) | — | `patrol.py` |
 | `tts:queue` | list | — | `/audio/speak` |
+| `stt:control` (pubsub) | channel | — | `/stt/start`, `/stt/stop` |
+| `stt:last_result` | string | 5m | `audio/stt.py` |
+| `vlm:latest` | JSON {text,ts,frame_id} | 30s | `vision/vlm.py` |
+| `face:latest` | JSON {faces,ts,frame_id,frame_w,frame_h} | 10s | `vision/facerec.py` |
 
 ## Custom ROS messages (roller_eye package)
 

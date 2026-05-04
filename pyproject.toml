@@ -37,10 +37,15 @@ mcp-server = [
     "opencv-python-headless>=4.8",
     "PyYAML>=6.0",
 ]
+facerec = [
+    "insightface>=0.7.3",
+    "onnxruntime>=1.17.0",
+]
 # Install everything: uv sync --all-groups
 all = [
     { include-group = "vision" },
     { include-group = "agent" },
     { include-group = "audio" },
     { include-group = "mcp-server" },
+    { include-group = "facerec" },
 ]
