@@ -215,11 +215,18 @@ angular.z = rotation  (+ = clockwise)
 
 ## Controller (Xbox / PS5)
 
-**Left stick** — move (forward/back + strafe). Tilt diagonally for diagonal movement.  
-**Right stick X** — rotate.  
-Hold **L2** = precision mode (slow, fine control).  
-Hold **R2** = boost mode (full speed).  
-No trigger = base speed.
+All inputs are independent and combine — press multiple simultaneously for complex moves.
+
+| Input | Action |
+|---|---|
+| D-pad ↑ / ↓ | Forward / backward (digital, full speed) |
+| D-pad ← / → | Strafe left / right (digital, full speed) |
+| D-pad ↑ + ← | Diagonal movement |
+| Left stick | Analog forward/back + strafe (alternative to d-pad) |
+| Right stick X | Rotate |
+| D-pad ↑ + right stick | Forward + rotate (drift) |
+| Hold **L2** | Precision mode (slow, fine control) |
+| Hold **R2** | Boost mode (full speed) |
 
 | Mode | Linear | Rotation |
 |---|---|---|
