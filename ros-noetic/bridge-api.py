@@ -534,6 +534,16 @@ def stt_stop():
         raise HTTPException(503, str(e))
 
 
+@app.get("/stt/result")
+def stt_result():
+    """Last transcription produced by stt.py (TTL 5 min)."""
+    try:
+        text = _redis().get("stt:last_result")
+        return {"text": text or ""}
+    except redis_lib.RedisError as e:
+        raise HTTPException(503, str(e))
+
+
 # ── Safety state ──────────────────────────────────────────────────────────────
 
 @app.get("/safety/state")

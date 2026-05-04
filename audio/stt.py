@@ -28,6 +28,7 @@ _recording    = threading.Event()
 _whisper      = None
 _whisper_lock = threading.Lock()
 _last_use_ts  = 0.0
+_redis_client = None   # set in main(), shared with _dispatch
 
 
 def _get_whisper():
@@ -94,6 +95,11 @@ def _dispatch(text: str):
     if not text:
         return
     print(f"[stt] → {text!r}", flush=True)
+    if _redis_client:
+        try:
+            _redis_client.set("stt:last_result", text, ex=300)
+        except Exception:
+            pass
     try:
         requests.post(f"{BRIDGE_URL}/mission/start",
                       json={"mode": "voice", "goal": text}, timeout=5)
@@ -125,9 +131,11 @@ def _on_stop():
 
 
 def main():
+    global _redis_client
     threading.Thread(target=_unload_whisper_after_idle, daemon=True).start()
 
     r = redis_lib.from_url(REDIS_URL, decode_responses=True)
+    _redis_client = r
     pubsub = r.pubsub(ignore_subscribe_messages=True)
     pubsub.subscribe("stt:control")
 
