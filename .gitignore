@@ -6,6 +6,9 @@ dataflows/
 ai/*.pt
 mobileclip_blt.ts
 
+# Catkin workspace — generated from ros-noetic/roller_eye; run: make build-bridge
+catkin_ws/
+
 __pycache__/
 *.py[cod]
 *$py.class

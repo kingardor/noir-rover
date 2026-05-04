@@ -970,12 +970,12 @@ const _driveKeys = new Set();
 let _driveTimer = null;
 
 const _keyVec = {
-  w: {y:  0.4, x:  0,   r:  0},
-  s: {y: -0.4, x:  0,   r:  0},
-  a: {y:  0,   x: -0.4, r:  0},
-  d: {y:  0,   x:  0.4, r:  0},
-  q: {y:  0,   x:  0,   r: -4},
-  e: {y:  0,   x:  0,   r:  4},
+  w: {y:  1.5, x:  0,   r:   0},
+  s: {y: -1.5, x:  0,   r:   0},
+  a: {y:  0,   x: -1.5, r:   0},
+  d: {y:  0,   x:  1.5, r:   0},
+  q: {y:  0,   x:  0,   r: -12},
+  e: {y:  0,   x:  0,   r:  12},
 };
 
 function _sendDrive() {

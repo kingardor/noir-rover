@@ -1,44 +1,31 @@
-.PHONY: dev logs stop sync dashboard keyboard ps5-test controller vlm facerec
+.PHONY: up stop sync build-bridge sync-bridge doctor keyboard ps5-test
 
-# Fallback: plain bash (no Tilt UI) — prefer: tilt up
-dev:
-	bash scripts/dev.sh
+MAMBA := /opt/homebrew/opt/micromamba/bin/micromamba
 
-logs:
-	bash scripts/logs.sh
+# Bootstrap all envs + launch the full stack
+install: sync build-bridge
 
-stop:
-	docker compose down
-	pkill -f "vision/app.py"     2>/dev/null || true
-	pkill -f "vision/vlm.py"     2>/dev/null || true
-	pkill -f "vision/facerec.py" 2>/dev/null || true
-
-# Install / sync all Python dependencies into .venv
+# Create (first run) or update (subsequent runs) noir_env from environment.yml
 sync:
-	uv sync --all-groups
+	@if $(MAMBA) env list | grep -q '^noir_env[[:space:]]'; then \
+	  $(MAMBA) env update -f environment.yml; \
+	else \
+	  $(MAMBA) create -f environment.yml -y; \
+	fi
 
-# Open dashboard in the default browser (standalone, no Tilt)
-dashboard:
-	python3 -m http.server 8013 --directory dashboard &
-	open http://localhost:8013
+# Install bridge pip deps into ros_env + build roller_eye catkin workspace
+sync-bridge:
+	$(MAMBA) run -n ros_env pip install -r ros-noetic/requirements.txt
 
-# Native macOS controller driver — Xbox or PS5 over Bluetooth → bridge API
-controller:
-	BRIDGE_URL=http://localhost:8012 REDIS_URL=redis://localhost:6380 \
-	  uv run python -u controllers/driver.py
+build-bridge: sync-bridge
+	mkdir -p catkin_ws/src
+	cp -r ros-noetic/roller_eye catkin_ws/src/
+	$(MAMBA) run -n ros_env catkin_make -C catkin_ws -DCMAKE_POLICY_VERSION_MINIMUM=3.5
 
-# Test PS5 DualSense controller (buttons, axes, rumble, lightbar)
-ps5-test:
-	uv run python scripts/ps5_test.py
+# Verify the dev environment is in shape
+doctor:
+	bash scripts/doctor.sh
 
-vlm:
-	BRIDGE_URL=http://localhost:8012 REDIS_URL=redis://localhost:6380 \
-	  uv run python -u vision/vlm.py
-
-facerec:
-	REDIS_URL=redis://localhost:6380 \
-	  uv run python -u vision/facerec.py
-
-# Keyboard teleoperation — sends UDP directly to relay on robot
+# Keyboard teleoperation (not managed by Tilt)
 keyboard:
-	uv run python scripts/keyboard_drive_native.py
+	$(MAMBA) run -n noir_env python scripts/keyboard_drive_native.py

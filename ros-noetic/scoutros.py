@@ -9,8 +9,6 @@ import rospy
 from rostopic import get_topic_class
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import Range, Imu
-
-from relay_protocol import RelayClient
 from nav_msgs.msg import Odometry
 
 CMD_VEL_TOPIC   = "/cmd_vel"
@@ -20,6 +18,7 @@ IMU_TOPIC       = "/SensorNode/imu"
 VIO_ODOM_TOPIC  = "/MotorNode/vio_odom_relative"
 BATTERY_TOPIC   = "/SensorNode/simple_battery_status"
 DETECT_TOPIC    = "/CoreNode/obj"
+
 
 _camera_data  = []
 _camera_lock  = threading.Lock()
@@ -33,13 +32,11 @@ _sensor_lock = threading.Lock()
 
 
 class ScoutROS:
-    """
-    ROS wrapper used by the FastAPI bridge.
-    Exposes motion, perception, nav services, and sensor state.
-    """
+    """ROS wrapper used by the FastAPI bridge."""
+
     def __init__(self, node_name: str = "scout_api"):
         self.node_name = node_name
-        self._relay: Optional[RelayClient] = None
+        self._cmd_vel_pub: Optional[rospy.Publisher] = None
         self._camera_sub  = None
         self._tof_sub     = None
         self._imu_sub     = None
@@ -52,26 +49,41 @@ class ScoutROS:
     def init(self):
         if self._inited:
             return
-        rospy.init_node(self.node_name, anonymous=True, disable_signals=True)
+        rospy.init_node(self.node_name, anonymous=False, disable_signals=True)
         rospy.loginfo("[SCOUT] rospy node initialized")
 
-        relay_host = os.environ.get("RELAY_HOST", "10.42.0.1")
-        relay_port = int(os.environ.get("RELAY_PORT", "9999"))
-        self._relay = RelayClient(relay_host, relay_port)
-        rospy.loginfo(f"[SCOUT] Relay client ready → {relay_host}:{relay_port}")
+        self._cmd_vel_pub = rospy.Publisher(CMD_VEL_TOPIC, Twist, queue_size=1)
+        rospy.loginfo(f"[SCOUT] Publisher ready → {CMD_VEL_TOPIC}")
 
         self._subscribe_camera()
         self._subscribe_sensors()
         self._inited = True
 
         def _resub():
+            _last_pub_ok = time.time()
             while not rospy.is_shutdown():
-                if self._camera_sub is None and self.is_connected:
+                time.sleep(2.0)
+                if not self.is_connected:
+                    continue
+                if self._camera_sub is None:
                     try:
                         self._subscribe_camera()
                     except Exception:
                         pass
-                time.sleep(2.0)
+                # If MotorNode dropped its /cmd_vel subscription (bridge restart),
+                # recreate the publisher so ROS master sends a publisherUpdate to MotorNode.
+                if self._cmd_vel_pub is not None:
+                    if self._cmd_vel_pub.get_num_connections() > 0:
+                        _last_pub_ok = time.time()
+                    elif time.time() - _last_pub_ok > 5.0:
+                        try:
+                            self._cmd_vel_pub.unregister()
+                            self._cmd_vel_pub = rospy.Publisher(
+                                CMD_VEL_TOPIC, Twist, queue_size=1)
+                            _last_pub_ok = time.time()
+                            rospy.logwarn("[SCOUT] /cmd_vel publisher recreated — MotorNode reconnect triggered")
+                        except Exception:
+                            pass
         threading.Thread(target=_resub, daemon=True).start()
 
     # ── camera ──────────────────────────────────────────────────────────────
@@ -210,7 +222,6 @@ class ScoutROS:
         with _sensor_lock:
             bat = None
             if _battery and len(_battery) >= 2:
-                # status[0]=charging state (0=CHARGING,1=UNCHARGE,2=FULL), status[1]=percentage
                 bat = {
                     "percentage": _battery[1],
                     "charging":   _battery[0] == 0,
@@ -226,11 +237,14 @@ class ScoutROS:
 
     # ── motion ──────────────────────────────────────────────────────────────
 
-    def publish_twist(self, x: float = 0.0, y: float = 0.0, rotate: float = 0.0,
-                      expires_ms: int = 150) -> bool:
-        if not self._inited or self._relay is None:
+    def publish_twist(self, x: float = 0.0, y: float = 0.0, rotate: float = 0.0) -> bool:
+        if not self._inited or self._cmd_vel_pub is None:
             return False
-        self._relay.send(x, y, rotate, expires_ms)
+        msg = Twist()
+        msg.linear.x  = float(x)
+        msg.linear.y  = float(y)
+        msg.angular.z = float(rotate)
+        self._cmd_vel_pub.publish(msg)
         return True
 
     def stop_robot(self) -> bool:

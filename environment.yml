@@ -1,0 +1,26 @@
+name: noir_env
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+    # shared
+    - redis>=5.0
+    - requests>=2.31
+    - numpy>=1.26
+    # controller (macOS GameController + CoreHaptics via PyObjC)
+    - pyobjc-core>=12.1
+    - pyobjc-framework-GameController>=12.1
+    - pyobjc-framework-CoreHaptics>=12.1
+    # vision (YOLOE on MPS)
+    - torch>=2.2
+    - ultralytics>=8.1
+    - supervision>=0.18
+    - opencv-python-headless>=4.8
+    - Pillow>=10.0
+    - ftfy>=6.0
+    - git+https://github.com/openai/CLIP.git
+    # face recognition
+    - insightface>=0.7.3
+    - onnxruntime>=1.17.0

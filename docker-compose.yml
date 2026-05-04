@@ -7,29 +7,7 @@ services:
       - ALLOW_EMPTY_PASSWORD=yes
     network_mode: "host"
 
-  noir-ros-noetic:
-    build: ros-noetic
-    network_mode: "host"
-    environment:
-      - ROS_MASTER_URI=http://10.42.0.1:11311
-      - ROS_IP=10.42.0.181
-      - RUN_ROSBRIDGE=0
-    stdin_open: true
-    tty: true
-    extra_hosts:
-      - linaro-alip:10.42.0.1
-
-  # Socat proxies — expose host-mode services to Mac's localhost.
-  # Bridge containers reach host-mode services via Docker VM's eth0 (192.168.65.3).
-  noir-api-proxy:
-    image: alpine/socat:latest
-    restart: always
-    ports:
-      - "8012:8012"   # Mac native services use localhost:8012
-    command: TCP-LISTEN:8012,fork,reuseaddr,bind=0.0.0.0 TCP:192.168.65.3:8011
-    depends_on:
-      - noir-ros-noetic
-
+  # Exposes VM-internal Redis to Mac's localhost:6380
   noir-redis-proxy:
     image: alpine/socat:latest
     restart: always

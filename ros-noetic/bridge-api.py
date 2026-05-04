@@ -3,6 +3,7 @@ import asyncio
 import base64
 import json
 import math
+import os
 import threading
 import time
 from typing import Optional
@@ -17,13 +18,14 @@ from scoutros import ScoutROS, CMD_VEL_TOPIC, CAMERA_TOPIC
 
 # ── Redis ─────────────────────────────────────────────────────────────────────
 
+_REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6380")
 _r: Optional[redis_lib.Redis] = None
 
 
 def _redis() -> redis_lib.Redis:
     global _r
     if _r is None:
-        _r = redis_lib.Redis(host="localhost", port=6379, decode_responses=True)
+        _r = redis_lib.Redis.from_url(_REDIS_URL, decode_responses=True)
     return _r
 
 

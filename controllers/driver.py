@@ -44,7 +44,7 @@ DURATION_MS = 400   # velocity hold per send; covers HTTP RTT spikes; robot auto
 SPEED = {
     "base":      (0.25,  4.0),
     "boost":     (1.4,  10.0),
-    "precision": (0.10,  1.5),
+    "precision": (0.22,  3.0),
 }
 
 # PS5 lightbar colors — GCColor takes 0.0–1.0 floats

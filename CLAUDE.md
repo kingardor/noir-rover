@@ -5,15 +5,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this project is
 
 Noir-rover is an autonomous AI rover system built on a **Moorebot Scout** omnidirectional robot. It combines:
-- A ROS Noetic bridge (Docker) connecting to the robot's SBC at `10.42.0.1`
+- A native macOS ROS Noetic bridge (via RoboStack) connecting to the robot's SBC at `10.42.0.1`
 - Native macOS ML services (YOLOE vision, VLM, face recognition)
 - Manual controller support (Xbox / PS5 over Bluetooth)
 
 ## Running the stack
 
 ```bash
-# Install / sync all Python dependencies into .venv
-make sync            # uv sync --all-groups
+# First-time setup: build the catkin workspace for roller_eye messages
+make build-bridge    # requires micromamba + ros_env (RoboStack)
+
+# Create / update noir_env conda environment (vision, facerec, controller deps)
+make sync            # micromamba env update -f environment.yml
 
 # Full stack with live UI
 tilt up
@@ -24,50 +27,59 @@ make dev             # or: bash scripts/dev.sh
 
 ## Network topology
 
-Docker containers use `network_mode: host` inside Docker Desktop's Linux VM.
-Two socat proxy containers forward VM ports to Mac's localhost:
+All services run natively on macOS or in Docker for Redis only.
 
-| Service | Mac localhost | Purpose |
+| Service | Port | Notes |
 |---|---|---|
-| Bridge API | `:8012` | All rover control + perception endpoints |
-| Redis | `:6380` | State bus (vision, memory) |
+| Bridge API | `:8012` | Runs natively; all rover control + perception endpoints |
+| Redis | `:6380` | Proxied from Docker VM via noir-redis-proxy |
 
-Native macOS services must use `BRIDGE_URL=http://localhost:8012` and `REDIS_URL=redis://localhost:6380`.
+Native macOS services use `BRIDGE_URL=http://localhost:8012` and `REDIS_URL=redis://localhost:6380`.
 
-## Key environment variables (Docker container)
+## Key environment variables (bridge)
 
 | Variable | Value | Purpose |
 |---|---|---|
 | `ROS_MASTER_URI` | `http://10.42.0.1:11311` | ROS master on robot |
 | `ROS_IP` | `10.42.0.181` | Mac's IP on robot subnet (update if IP changes) |
-| `RUN_NOIR` | `0` | Set to `1` to enable Xbox controller loop |
-| `RUN_ROSBRIDGE` | `0` | Set to `1` to enable WebSocket bridge |
+| `XMLRPC_PORT` | `11323` | Fixed XMLRPC port — stable URI prevents master "same name" bump on restart |
+| `REDIS_URL` | `redis://localhost:6380` | Redis connection |
 
 ## Architecture
 
 ```
-MacBook Air M4 (native Python)          Docker VM (Linux containers)
-┌─────────────────────────┐             ┌────────────────────────────┐
-│ vision/app.py  (YOLOE)  │──localhost  │ noir-api-proxy  :8012→8011 │
-│ vision/vlm.py  (VLM)    │──:8012 ──►  │ noir-redis-proxy:6380→6379 │
-│ vision/facerec.py       │──:6380 ──►  │                            │
-│ controllers/driver.py   │             │ noir-ros-noetic   host mode │
-└─────────────────────────┘             │   bridge-api.py   :8011    │
-                                        │   scoutros.py  (ROS)       │
-                                        │ noir-redis        host mode │
-                                        └────────────┬───────────────┘
-                                                     │  ROS TCP
-                                                     ▼
-                                        Scout robot at 10.42.0.1
+MacBook Air M4 (all native)             Docker VM (Linux containers)
+┌──────────────────────────┐            ┌────────────────────────────┐
+│ ros-noetic/bridge-api.py │            │ noir-redis-proxy:6380→6379 │
+│ ros-noetic/scoutros.py   │──:6380 ──► │                            │
+│   (RoboStack ROS Noetic) │            │ noir-redis        host mode │
+│                          │            └────────────────────────────┘
+│ vision/app.py  (YOLOE)   │
+│ vision/vlm.py  (VLM)     │
+│ vision/facerec.py        │
+│ controllers/driver.py    │
+└──────────┬───────────────┘
+           │  ROS TCP (direct — no proxy)
+           ▼
+Scout robot at 10.42.0.1
 ```
+
+## RoboStack setup (one-time)
+
+```bash
+brew install micromamba
+micromamba create -n ros_env -c conda-forge -c robostack-staging \
+  ros-noetic-ros-base python=3.11 --yes
+make build-bridge    # also runs sync-bridge (installs fastapi/uvicorn/redis/pydantic into ros_env)
+```
+
+The `catkin_ws/` directory is gitignored. `make build-bridge` creates it from `ros-noetic/roller_eye/`.
 
 ## Module responsibilities
 
-### Docker (ros-noetic/)
+### Bridge (ros-noetic/) — runs natively via RoboStack micromamba
 - **`scoutros.py`** — Only ROS-touching code. Publishes Twist on `/cmd_vel`; subscribes to camera, ToF, IMU, VIO, battery. Service wrappers for `algo_action`, `algo_move`, `algo_roll`, nav.
-- **`bridge-api.py`** — FastAPI bridge (v4). Magnitude-clamp safety arbiter, all endpoints. Uses Redis for vision state and Xbox activity tracking.
-- **`noir.py`** — Xbox controller loop (disabled by default). Stamps `xbox:last_input_ts` in Redis.
-- **`xbox.py`** — `XboxBotDriver` reading evdev.
+- **`bridge-api.py`** — FastAPI bridge (v4). Magnitude-clamp safety arbiter, all endpoints. Uses Redis for vision state and Xbox activity tracking. Runs on port 8012.
 
 ### Native macOS (Python 3.11+)
 - **`vision/app.py`** — YOLOE on MPS. Publishes `vision:latest` JSON and `vision:thumb:{id}` to Redis. Runs `vision/memory.py` as thread.
@@ -76,7 +88,7 @@ MacBook Air M4 (native Python)          Docker VM (Linux containers)
 - **`vision/facerec.py`** — Face recognition using InsightFace (`buffalo_l`). Polls `vision:latest`, detects + identifies faces against enrolled images in `faces/`, publishes to `face:latest` (TTL 10s). Enrolled images: `faces/<Name>.jpg`. Threshold: 0.35 cosine similarity.
 - **`controllers/driver.py`** — Xbox / PS5 controller loop via GameController.framework at 60 Hz. Stamps `xbox:last_input_ts` in Redis on input.
 
-## Bridge API endpoints (port 8011 / proxied to 8012)
+## Bridge API endpoints (port 8012)
 
 | Endpoint | Purpose |
 |---|---|
@@ -129,8 +141,10 @@ angular.z = rotation (+ = clockwise)
 
 ## Custom ROS messages (roller_eye package)
 
-`roller_eye/` defines 9 message types and 29 service types for the Scout's proprietary API including:
+`ros-noetic/roller_eye/` defines 9 message types and 29 service types for the Scout's proprietary API including:
 - `frame.msg` — multiplexed A/V (JPG=1, H264=0, AAC=2)
 - `detect.msg` — object detection result
 - `algo_action.srv`, `algo_move.srv`, `algo_roll.srv` — motion services
 - `nav_patrol.srv`, `nav_list_path.srv`, etc. — navigation services
+
+Python classes are generated into `catkin_ws/` by `make build-bridge`.
