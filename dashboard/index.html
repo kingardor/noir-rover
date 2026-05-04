@@ -296,12 +296,12 @@
     .right { display: flex; flex-direction: column; gap: 10px; min-height: 0; overflow-y: auto; }
 
     /* Sensor grid */
-    .sensor-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--border); }
-    .sensor-cell { background: var(--card); padding: 10px 12px; }
+    .sensor-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1px; background: var(--border); }
+    .sensor-cell { background: var(--card); padding: 5px 8px; }
 
-    .s-lbl { font-family: var(--font-hd); font-size: 8px; font-weight: 700; letter-spacing: .18em; color: var(--fg-dim); margin-bottom: 4px; }
-    .s-val { font-size: 22px; font-weight: 500; line-height: 1; color: var(--cyan); text-shadow: var(--glow-cyan); }
-    .s-unit { font-size: 10px; color: var(--fg-dim); margin-left: 2px; }
+    .s-lbl { font-family: var(--font-hd); font-size: 7px; font-weight: 700; letter-spacing: .14em; color: var(--fg-dim); margin-bottom: 2px; }
+    .s-val { font-size: 13px; font-weight: 500; line-height: 1; color: var(--cyan); text-shadow: var(--glow-cyan); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .s-unit { font-size: 9px; color: var(--fg-dim); margin-left: 1px; }
 
     /* Drive pad */
     .drive-pad {
