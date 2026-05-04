@@ -363,6 +363,44 @@
       color: var(--border);
     }
     .drive-hint { text-align: center; font-size: 10px; color: var(--fg-dim); letter-spacing: .05em; padding: 0 12px 10px; }
+
+    /* Voice card */
+    .voice-body { padding: 12px 14px; display: flex; flex-direction: column; gap: 12px; }
+    .mic-row { display: flex; align-items: center; justify-content: center; gap: 14px; }
+    .mic-btn {
+      width: 52px; height: 52px; border-radius: 50%;
+      background: rgba(255,255,255,.04);
+      border: 1.5px solid var(--border);
+      color: var(--fg-dim);
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: border-color 150ms, color 150ms, box-shadow 150ms;
+      user-select: none;
+    }
+    .mic-btn:hover  { border-color: var(--cyan); color: var(--cyan); }
+    .mic-btn.active { border-color: var(--red); color: var(--red);
+      box-shadow: 0 0 12px rgba(255,51,102,.4);
+      animation: mic-pulse 1s ease-in-out infinite; }
+    @keyframes mic-pulse { 0%,100%{ box-shadow: 0 0 8px rgba(255,51,102,.3); }
+                           50%{     box-shadow: 0 0 18px rgba(255,51,102,.6); } }
+    .mic-label { font-size: 9px; font-family: var(--font-hd); letter-spacing: .14em; color: var(--fg-dim); }
+    .mic-status { font-size: 10px; color: var(--fg-dim); font-style: italic; min-height: 14px; }
+    .tts-row { display: flex; gap: 6px; }
+    .tts-input {
+      flex: 1; background: rgba(255,255,255,.04); border: 1px solid var(--border);
+      border-radius: 4px; color: var(--fg); font-family: var(--font-mono);
+      font-size: 11px; padding: 5px 8px; outline: none;
+      transition: border-color 150ms;
+    }
+    .tts-input:focus { border-color: var(--cyan); }
+    .tts-btn {
+      background: rgba(0,212,255,.08); border: 1px solid var(--cyan);
+      border-radius: 4px; color: var(--cyan); font-family: var(--font-hd);
+      font-size: 9px; letter-spacing: .12em; padding: 5px 10px;
+      cursor: pointer; white-space: nowrap;
+      transition: background 150ms;
+    }
+    .tts-btn:hover { background: rgba(0,212,255,.18); }
     .drive-speed {
       display: flex;
       align-items: center;
@@ -597,6 +635,33 @@
         <span id="spd-val">60%</span>
       </div>
       <div class="drive-hint">WASD · Q/E rotate · hold to move</div>
+    </div>
+
+    <!-- Voice I/O -->
+    <div class="card">
+      <div class="card-hdr">
+        VOICE <span class="hl">// I/O</span>
+        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+      </div>
+      <div class="voice-body">
+        <div class="mic-row">
+          <div>
+            <button class="mic-btn" id="mic-btn"
+              onmousedown="sttStart()" onmouseup="sttStop()" onmouseleave="sttStop()"
+              ontouchstart="sttStart(event)" ontouchend="sttStop()"
+              title="Hold to record — releases to transcribe">
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+            </button>
+            <div class="mic-label" style="text-align:center;margin-top:4px">HOLD TO TALK</div>
+          </div>
+          <div class="mic-status" id="mic-status">idle</div>
+        </div>
+        <div class="tts-row">
+          <input class="tts-input" id="tts-input" type="text" placeholder="speak text…"
+            onkeydown="if(event.key==='Enter')ttsSend()">
+          <button class="tts-btn" onclick="ttsSend()">SPEAK</button>
+        </div>
+      </div>
     </div>
 
     <!-- Memory stream -->
@@ -846,10 +911,11 @@ async function pollDetections() {
   body.innerHTML = sorted.map(det => {
     const pct  = Math.round(((det.conf ?? det.confidence) || 0) * 100);
     const name = (det.label || det.name || '?').toUpperCase();
+    const col  = pct >= 70 ? 'var(--accent)' : pct >= 40 ? 'var(--amber)' : 'var(--red)';
     return `<div class="det-row">
       <span class="det-name">${name}</span>
-      <div class="det-bar-bg"><div class="det-bar" style="width:${pct}%"></div></div>
-      <span class="det-pct">${pct}%</span>
+      <div class="det-bar-bg"><div class="det-bar" style="width:${pct}%;background:${col}"></div></div>
+      <span class="det-pct" style="color:${col}">${pct}%</span>
     </div>`;
   }).join('');
 }
@@ -943,6 +1009,39 @@ async function doEstop() {
   await apiPost('/robot/stop');
   await apiPost('/mission/stop');
   toast('E-STOP sent');
+}
+
+// ── Voice I/O ────────────────────────────────────────────────────────────────
+let _micActive = false;
+
+function _setMicStatus(text) {
+  document.getElementById('mic-status').textContent = text;
+}
+
+async function sttStart() {
+  if (_micActive) return;
+  _micActive = true;
+  document.getElementById('mic-btn').classList.add('active');
+  _setMicStatus('recording…');
+  await apiPost('/stt/start');
+}
+
+async function sttStop() {
+  if (!_micActive) return;
+  _micActive = false;
+  document.getElementById('mic-btn').classList.remove('active');
+  _setMicStatus('transcribing…');
+  await apiPost('/stt/stop');
+  setTimeout(() => _setMicStatus('idle'), 4000);
+}
+
+async function ttsSend() {
+  const inp = document.getElementById('tts-input');
+  const text = inp.value.trim();
+  if (!text) return;
+  await apiPost('/audio/speak', { text });
+  inp.value = '';
+  toast('Speaking…');
 }
 
 // ── Manual drive (WASD + Q/E) ────────────────────────────────────────────────

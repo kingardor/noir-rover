@@ -514,6 +514,26 @@ def audio_speak(body: SpeakRequest):
         raise HTTPException(503, str(e))
 
 
+@app.post("/stt/start")
+def stt_start():
+    """Signal stt.py to begin recording."""
+    try:
+        _redis().publish("stt:control", "start")
+        return {"ok": True}
+    except redis_lib.RedisError as e:
+        raise HTTPException(503, str(e))
+
+
+@app.post("/stt/stop")
+def stt_stop():
+    """Signal stt.py to stop recording and transcribe."""
+    try:
+        _redis().publish("stt:control", "stop")
+        return {"ok": True}
+    except redis_lib.RedisError as e:
+        raise HTTPException(503, str(e))
+
+
 # ── Safety state ──────────────────────────────────────────────────────────────
 
 @app.get("/safety/state")
