@@ -176,7 +176,7 @@ class Session:
             self._set_light(*_C_IDLE)
 
     def read(self):
-        """Return analog (LY, LX, RX, LT, RT) and d-pad booleans (DU, DD, DL, DR)."""
+        """Return analog (LY, LX, RX, LT, RT), d-pad (DU, DD, DL, DR), shoulders (LB, RB)."""
         gp = self.gp
         dp = gp.dpad()
         return (
@@ -189,6 +189,8 @@ class Session:
             bool(dp.down().isPressed()),
             bool(dp.left().isPressed()),
             bool(dp.right().isPressed()),
+            bool(gp.leftShoulder().isPressed()),
+            bool(gp.rightShoulder().isPressed()),
         )
 
     def buzz(self, style: str):
@@ -320,7 +322,7 @@ def main():
                 continue
 
             # ── Inputs ───────────────────────────────────────────────────────
-            LY, LX, RX, LT, RT, DU, DD, DL, DR = session.read()
+            LY, LX, RX, LT, RT, DU, DD, DL, DR, LB, RB = session.read()
 
             lt = LT > TRIG_PRESS
             rt = RT > TRIG_PRESS
@@ -340,10 +342,10 @@ def main():
                 fwdmax, rotmax = SPEED["base"]
 
             # Each input source is independent — values sum then clamp.
-            # D-pad gives full digital speed per direction; sticks give analog.
+            # D-pad and shoulders give full digital speed; sticks give analog.
             fwd    = _clamp(LY * fwdmax + (DU - DD) * fwdmax, -fwdmax, fwdmax)
             strafe = _clamp(LX * fwdmax + (DR - DL) * fwdmax, -fwdmax, fwdmax)
-            rotate = _clamp(RX) * rotmax
+            rotate = _clamp(RX * rotmax + (RB - LB) * rotmax, -rotmax, rotmax)
 
             moving = abs(fwd) > 1e-3 or abs(strafe) > 1e-3 or abs(rotate) > 1e-3
 

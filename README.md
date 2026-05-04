@@ -224,7 +224,9 @@ All inputs are independent and combine — press multiple simultaneously for com
 | D-pad ↑ + ← | Diagonal movement |
 | Left stick | Analog forward/back + strafe (alternative to d-pad) |
 | Right stick X | Rotate |
+| **L1 / R1** | Rotate left / right (digital, combines with right stick) |
 | D-pad ↑ + right stick | Forward + rotate (drift) |
+| D-pad ↑ + R1 | Forward + rotate (drift, digital) |
 | Hold **L2** | Precision mode (slow, fine control) |
 | Hold **R2** | Boost mode (full speed) |
 
