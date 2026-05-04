@@ -1,4 +1,4 @@
-.PHONY: dev logs stop e2e sync voice patrol follow dashboard keyboard ps5-test controller vlm facerec
+.PHONY: dev logs stop sync dashboard keyboard ps5-test controller vlm facerec
 
 # Fallback: plain bash (no Tilt UI) — prefer: tilt up
 dev:
@@ -9,15 +9,9 @@ logs:
 
 stop:
 	docker compose down
-	pkill -f "vision/app.py"    2>/dev/null || true
-	pkill -f "vision/vlm.py"    2>/dev/null || true
+	pkill -f "vision/app.py"     2>/dev/null || true
+	pkill -f "vision/vlm.py"     2>/dev/null || true
 	pkill -f "vision/facerec.py" 2>/dev/null || true
-	pkill -f "audio/tts.py"     2>/dev/null || true
-	pkill -f "audio/stt.py"     2>/dev/null || true
-	pkill -f "mcp/main.py"      2>/dev/null || true
-
-e2e:
-	bash scripts/e_stop_test.sh
 
 # Install / sync all Python dependencies into .venv
 sync:
@@ -27,20 +21,6 @@ sync:
 dashboard:
 	python3 -m http.server 8013 --directory dashboard &
 	open http://localhost:8013
-
-# Run a voice mission
-# Usage: make voice GOAL="find the red mug"
-voice:
-	BRIDGE_URL=http://localhost:8012 REDIS_URL=redis://localhost:6380 \
-	  uv run python -m agent.missions.voice "$(GOAL)"
-
-patrol:
-	BRIDGE_URL=http://localhost:8012 REDIS_URL=redis://localhost:6380 \
-	  uv run python -m agent.missions.patrol
-
-follow:
-	BRIDGE_URL=http://localhost:8012 REDIS_URL=redis://localhost:6380 \
-	  uv run python -m agent.missions.follow
 
 # Native macOS controller driver — Xbox or PS5 over Bluetooth → bridge API
 controller:

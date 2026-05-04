@@ -24,7 +24,7 @@ from PIL import Image
 
 REDIS_URL        = os.getenv("REDIS_URL",        "redis://localhost:6380")
 FACES_DIR        = os.getenv("FACES_DIR",        "faces")
-FACEREC_INTERVAL = float(os.getenv("FACEREC_INTERVAL", "0.5"))
+FACEREC_INTERVAL = float(os.getenv("FACEREC_INTERVAL", "2.0"))
 MATCH_THRESHOLD  = float(os.getenv("FACEREC_THRESHOLD", "0.35"))
 DET_SIZE         = (640, 640)
 

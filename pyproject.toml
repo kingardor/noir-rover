@@ -21,22 +21,6 @@ vision = [
     "clip @ git+https://github.com/openai/CLIP.git",
     "ftfy>=6.0",
 ]
-agent = [
-    "openai>=1.12",
-    "opencv-python-headless>=4.8",
-    "PyYAML>=6.0",
-]
-audio = [
-    "sounddevice>=0.4.6",
-    "mlx-whisper>=0.3",
-    "pynput>=1.7",
-]
-mcp-server = [
-    "mcp>=1.0",
-    "openai>=1.12",
-    "opencv-python-headless>=4.8",
-    "PyYAML>=6.0",
-]
 facerec = [
     "insightface>=0.7.3",
     "onnxruntime>=1.17.0",
@@ -44,8 +28,5 @@ facerec = [
 # Install everything: uv sync --all-groups
 all = [
     { include-group = "vision" },
-    { include-group = "agent" },
-    { include-group = "audio" },
-    { include-group = "mcp-server" },
     { include-group = "facerec" },
 ]

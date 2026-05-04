@@ -28,19 +28,9 @@ BRIDGE_URL=http://localhost:8012 REDIS_URL=redis://localhost:6380 \
   uv run python -u vision/app.py >> logs/vision.log 2>&1 &
 pids+=($!)
 
-echo "[dev] Starting TTS service..."
-REDIS_URL=redis://localhost:6380 \
-  uv run python -u audio/tts.py >> logs/tts.log 2>&1 &
-pids+=($!)
-
-echo "[dev] Starting STT service..."
-BRIDGE_URL=http://localhost:8012 \
-  uv run python -u audio/stt.py >> logs/stt.log 2>&1 &
-pids+=($!)
-
 echo ""
 echo "[dev] All services running. Logs in logs/"
-echo "      vision PID=${pids[0]}  tts PID=${pids[1]}  stt PID=${pids[2]}"
+echo "      vision PID=${pids[0]}"
 echo "      Run: make logs   or   bash scripts/logs.sh"
 echo "      Press Ctrl-C to stop."
 

@@ -3,7 +3,7 @@
 #
 # Labels:
 #   infra  — Docker-based services (Redis, ROS bridge, socat proxies)
-#   native — macOS-native services requiring MPS/Metal (vision, audio, MCP)
+#   native — macOS-native services requiring MPS/Metal (vision)
 
 # ── Docker Compose (infra) ────────────────────────────────────────────────────
 docker_compose('docker-compose.yml')
@@ -30,9 +30,8 @@ local_resource(
 )
 
 # ── Native macOS services ─────────────────────────────────────────────────────
-# Vision and STT must run natively: Docker Desktop on Mac cannot pass MPS/Metal
-# through to containers. YOLOE on CPU is ~10x slower; mlx-whisper is Apple-only.
-# Agent, TTS, and MCP share the same venv and are simpler to manage alongside them.
+# Vision must run natively: Docker Desktop on Mac cannot pass MPS/Metal
+# through to containers. YOLOE on CPU is ~10x slower.
 
 # Ollama is managed by the macOS menu-bar app — do not call 'ollama serve'.
 # This gate simply waits until the already-running Ollama is reachable.
@@ -65,51 +64,6 @@ local_resource(
     labels=['native'],
     resource_deps=['bridge-ready', 'vision'],
 )
-
-local_resource(
-    'tts',
-    serve_cmd='REDIS_URL=redis://localhost:6380 uv run python -u audio/tts.py',
-    deps=['audio/tts.py'],
-    labels=['native'],
-    resource_deps=['bridge-ready'],
-)
-
-local_resource(
-    'stt',
-    serve_cmd='BRIDGE_URL=http://localhost:8012 uv run python -u audio/stt.py',
-    deps=['audio/stt.py'],
-    labels=['native'],
-    resource_deps=['bridge-ready'],
-)
-
-# Mission daemons — idle until their Redis mission:active mode is set by the dashboard/API
-local_resource(
-    'voice',
-    serve_cmd='BRIDGE_URL=http://localhost:8012 REDIS_URL=redis://localhost:6380 uv run python -u -m agent.missions.voice',
-    deps=['agent/missions/voice.py', 'agent/agent.py', 'agent/tools.py', 'agent/client.py'],
-    labels=['native'],
-    resource_deps=['bridge-ready', 'vision', 'ollama-ready'],
-)
-
-local_resource(
-    'follow',
-    serve_cmd='BRIDGE_URL=http://localhost:8012 REDIS_URL=redis://localhost:6380 uv run python -u -m agent.missions.follow',
-    deps=['agent/missions/follow.py'],
-    labels=['native'],
-    resource_deps=['bridge-ready', 'vision'],
-)
-
-local_resource(
-    'patrol',
-    serve_cmd='BRIDGE_URL=http://localhost:8012 REDIS_URL=redis://localhost:6380 uv run python -u -m agent.missions.patrol',
-    deps=['agent/missions/patrol.py'],
-    labels=['native'],
-    resource_deps=['bridge-ready'],
-)
-
-# MCP is a stdio server invoked by Claude Desktop/Code — not a long-running
-# service. Configure it via mcp/main.py docstring instructions instead.
-# local_resource('mcp', ...) intentionally omitted.
 
 # Controller — Xbox or PS5 over BT → bridge API. Waits quietly when no controller is paired.
 local_resource(

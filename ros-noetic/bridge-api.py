@@ -38,7 +38,6 @@ class Vel(BaseModel):
     y: float = 0.0
     rotate: float = 0.0
     duration_ms: Optional[int] = None
-    source: str = "manual"  # "manual" | "agent" | "xbox"
 
 
 class AlgoAction(BaseModel):
@@ -46,14 +45,12 @@ class AlgoAction(BaseModel):
     y_speed: float = 0.0
     rotated_speed: float = 0.0
     duration_ms: int = 1000  # milliseconds — passed directly to UtilNode/algo_action `time` field
-    source: str = "agent"
 
 
 class AlgoMove(BaseModel):
     x_dist: float = 0.0
     y_dist: float = 0.0
     speed: float = 0.3
-    source: str = "agent"
 
 
 class AlgoRoll(BaseModel):
@@ -61,7 +58,6 @@ class AlgoRoll(BaseModel):
     speed_rad_s: float = 1.0
     timeout_s: int = 10
     error_rad: float = 0.05
-    source: str = "agent"
 
 
 class PatrolStart(BaseModel):
@@ -71,15 +67,6 @@ class PatrolStart(BaseModel):
 
 class PathSave(BaseModel):
     name: str
-
-
-class MissionStart(BaseModel):
-    mode: str   # "voice" | "follow" | "patrol"
-    goal: Optional[str] = None
-
-
-class SpeakRequest(BaseModel):
-    text: str
 
 
 # ── Arbiter ───────────────────────────────────────────────────────────────────
@@ -94,19 +81,8 @@ def _record_allowed_move():
         _last_allowed_move_ts = _now()
 
 
-def arbiter_allow(x: float, y: float, rotate: float, source: str) -> tuple:
-    """Return (True, 'ok') or (False, reason). Xbox source bypasses Xbox gate."""
-    if source == "agent":
-        try:
-            r = _redis()
-            last_xbox = r.get("xbox:last_input_ts")
-            if last_xbox and (_now() - float(last_xbox)) < 2.0:
-                return False, "xbox_active"
-            last_hb = r.get("agent:heartbeat_ts")
-            if not last_hb or (_now() - float(last_hb)) > 1.5:
-                return False, "heartbeat_stale"
-        except redis_lib.RedisError:
-            return False, "redis_unavailable"
+def arbiter_allow(x: float, y: float, rotate: float) -> tuple:
+    """Return (True, 'ok') or (False, reason). Magnitude clamp only."""
     if abs(x) > 1.5 or abs(y) > 1.5 or abs(rotate) > 12.0:
         return False, "magnitude_exceeded"
     return True, "ok"
@@ -148,29 +124,11 @@ def _vel_hold_loop():
             pass
 
 
-# ── Watchdog thread ───────────────────────────────────────────────────────────
-
-def _watchdog():
-    """Stop robot within 500 ms if mission is active but no move has been allowed recently."""
-    while True:
-        time.sleep(0.1)
-        try:
-            mission = _redis().get("mission:active") or "idle"
-            if mission == "idle":
-                continue
-            with _allowed_move_lock:
-                last_ts = _last_allowed_move_ts
-            if last_ts is None or (_now() - last_ts) > 0.5:
-                ros.stop_robot()
-        except Exception:
-            pass
-
-
 # ── App ───────────────────────────────────────────────────────────────────────
 
 app = FastAPI(
     title="Moorebot Scout API",
-    description="Motion + Perception + Nav + Mission bridge (ScoutROS / rospy)",
+    description="Motion + Perception + Nav bridge (ScoutROS / rospy)",
     version="4.0.0",
 )
 app.add_middleware(
@@ -185,7 +143,6 @@ ros = ScoutROS(node_name="scout_api")
 @app.on_event("startup")
 def startup():
     threading.Thread(target=ros.init, daemon=True).start()
-    threading.Thread(target=_watchdog, daemon=True).start()
     threading.Thread(target=_vel_hold_loop, daemon=True).start()
 
 
@@ -284,7 +241,7 @@ def stop_robot():
 def move(v: Vel):
     if not ros.is_connected:
         raise HTTPException(503, "Not connected to ROS master")
-    ok, reason = arbiter_allow(v.x, v.y, v.rotate, v.source)
+    ok, reason = arbiter_allow(v.x, v.y, v.rotate)
     if not ok:
         raise HTTPException(403, f"Arbiter blocked: {reason}")
     hold_s = (v.duration_ms / 1000.0) if v.duration_ms else 0.4
@@ -299,7 +256,7 @@ def move(v: Vel):
 
 @app.post("/move/action")
 def move_action(body: AlgoAction):
-    ok, reason = arbiter_allow(body.x_speed, body.y_speed, body.rotated_speed, body.source)
+    ok, reason = arbiter_allow(body.x_speed, body.y_speed, body.rotated_speed)
     if not ok:
         raise HTTPException(403, f"Arbiter blocked: {reason}")
     _record_allowed_move()
@@ -311,7 +268,7 @@ def move_action(body: AlgoAction):
 
 @app.post("/move/distance")
 def move_distance(body: AlgoMove):
-    ok, reason = arbiter_allow(body.x_dist, body.y_dist, 0.0, body.source)
+    ok, reason = arbiter_allow(body.x_dist, body.y_dist, 0.0)
     if not ok:
         raise HTTPException(403, f"Arbiter blocked: {reason}")
     _record_allowed_move()
@@ -323,7 +280,7 @@ def move_distance(body: AlgoMove):
 
 @app.post("/move/rotate")
 def move_rotate(body: AlgoRoll):
-    ok, reason = arbiter_allow(0.0, 0.0, body.angle_rad, body.source)
+    ok, reason = arbiter_allow(0.0, 0.0, body.angle_rad)
     if not ok:
         raise HTTPException(403, f"Arbiter blocked: {reason}")
     _record_allowed_move()
@@ -336,21 +293,17 @@ def move_rotate(body: AlgoRoll):
 # ── Look around ───────────────────────────────────────────────────────────────
 
 @app.post("/look_around")
-def look_around(
-    n_frames: int = Query(default=8, ge=4, le=16),
-    source: str = Query(default="agent"),
-):
+def look_around(n_frames: int = Query(default=8, ge=4, le=16)):
     """Slow 360° rotation capturing N evenly-spaced frames with available detections."""
     rotation_speed = 0.5   # rad/s
     total_time = (2 * math.pi) / rotation_speed   # ~12.6 s
     interval = total_time / n_frames
 
-    ok, reason = arbiter_allow(0.0, 0.0, rotation_speed, source)
+    ok, reason = arbiter_allow(0.0, 0.0, rotation_speed)
     if not ok:
         raise HTTPException(403, f"Arbiter blocked: {reason}")
 
     results = []
-    # Start rotating via service call (duration covers one inter-frame interval + buffer)
     slot_ms = int((math.ceil(interval) + 1) * 1000)
     ros.algo_action(0.0, 0.0, rotation_speed, slot_ms)
     _record_allowed_move()
@@ -359,21 +312,9 @@ def look_around(
         r = _redis()
         for i in range(n_frames):
             heading_deg = round((i / n_frames) * 360.0, 1)
-
-            # Xbox preemption check
-            try:
-                lx = r.get("xbox:last_input_ts")
-                if lx and (_now() - float(lx)) < 2.0 and source == "agent":
-                    raise HTTPException(403, "Xbox preempted look_around")
-            except HTTPException:
-                raise
-            except Exception:
-                pass
-
             time.sleep(interval)
             _record_allowed_move()
 
-            # Keep rotating by refreshing the action (last frame doesn't need refresh)
             if i < n_frames - 1:
                 ros.algo_action(0.0, 0.0, rotation_speed, slot_ms)
 
@@ -450,100 +391,6 @@ def nav_path_save(body: PathSave):
     return result
 
 
-# ── Agent / Mission ───────────────────────────────────────────────────────────
-
-@app.post("/agent/heartbeat")
-def agent_heartbeat():
-    """Agent calls this ≥ 1 Hz to keep the arbiter's heartbeat gate open."""
-    try:
-        _redis().set("agent:heartbeat_ts", str(_now()), ex=5)
-    except redis_lib.RedisError as e:
-        raise HTTPException(503, f"Redis unavailable: {e}")
-    return {"ok": True, "ts": _now()}
-
-
-@app.post("/mission/start")
-def mission_start(body: MissionStart):
-    r = _redis()
-    try:
-        acquired = r.set("mission:lock", "1", nx=True, ex=5)
-        if not acquired:
-            return {"ok": False, "reason": "another_mission_active"}
-        r.set("mission:active", body.mode)
-        if body.goal:
-            r.set("mission:goal", body.goal, ex=3600)
-        return {"ok": True, "mode": body.mode}
-    except redis_lib.RedisError as e:
-        raise HTTPException(503, str(e))
-
-
-@app.post("/mission/stop")
-def mission_stop():
-    r = _redis()
-    try:
-        r.delete("mission:lock")
-        r.set("mission:active", "idle")
-        ros.stop_robot()
-        return {"ok": True}
-    except redis_lib.RedisError as e:
-        raise HTTPException(503, str(e))
-
-
-@app.get("/mission/state")
-def mission_state():
-    r = _redis()
-    try:
-        return {
-            "active": r.get("mission:active") or "idle",
-            "goal": r.get("mission:goal"),
-            "lock": r.exists("mission:lock") == 1,
-        }
-    except redis_lib.RedisError as e:
-        raise HTTPException(503, str(e))
-
-
-# ── Audio ─────────────────────────────────────────────────────────────────────
-
-@app.post("/audio/speak")
-def audio_speak(body: SpeakRequest):
-    """Push text to TTS queue consumed by audio/tts.py."""
-    try:
-        _redis().rpush("tts:queue", body.text)
-        return {"ok": True, "text": body.text}
-    except redis_lib.RedisError as e:
-        raise HTTPException(503, str(e))
-
-
-@app.post("/stt/start")
-def stt_start():
-    """Signal stt.py to begin recording."""
-    try:
-        _redis().publish("stt:control", "start")
-        return {"ok": True}
-    except redis_lib.RedisError as e:
-        raise HTTPException(503, str(e))
-
-
-@app.post("/stt/stop")
-def stt_stop():
-    """Signal stt.py to stop recording and transcribe."""
-    try:
-        _redis().publish("stt:control", "stop")
-        return {"ok": True}
-    except redis_lib.RedisError as e:
-        raise HTTPException(503, str(e))
-
-
-@app.get("/stt/result")
-def stt_result():
-    """Last transcription produced by stt.py (TTL 5 min)."""
-    try:
-        text = _redis().get("stt:last_result")
-        return {"text": text or ""}
-    except redis_lib.RedisError as e:
-        raise HTTPException(503, str(e))
-
-
 # ── VLM scene description ──────────────────────────────────────────────────────
 
 @app.get("/vlm/description")
@@ -578,18 +425,13 @@ def safety_state():
     now = _now()
     try:
         last_xbox_raw = r.get("xbox:last_input_ts")
-        last_hb_raw = r.get("agent:heartbeat_ts")
         last_xbox = float(last_xbox_raw) if last_xbox_raw else None
-        last_hb = float(last_hb_raw) if last_hb_raw else None
         with _allowed_move_lock:
             last_move = _last_allowed_move_ts
         return {
             "xbox_active": bool(last_xbox and (now - last_xbox) < 2.0),
             "xbox_last_input_age_s": round(now - last_xbox, 2) if last_xbox else None,
-            "heartbeat_ok": bool(last_hb and (now - last_hb) < 1.5),
-            "heartbeat_age_s": round(now - last_hb, 2) if last_hb else None,
             "last_allowed_move_age_s": round(now - last_move, 2) if last_move else None,
-            "mission": r.get("mission:active") or "idle",
         }
     except redis_lib.RedisError as e:
         raise HTTPException(503, str(e))
