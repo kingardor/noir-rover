@@ -176,15 +176,14 @@ class Session:
             self._set_light(*_C_IDLE)
 
     def read(self):
-        """Return (LY, RX, LT, RT, LB, RB). Left stick Y = fwd/back, right stick X = strafe."""
+        """Return (LY, LX, RX, LT, RT). Left stick = move, right stick X = rotate."""
         gp = self.gp
         return (
             _dz(_clamp(gp.leftThumbstick().yAxis().value())),
+            _dz(_clamp(gp.leftThumbstick().xAxis().value())),
             _dz(_clamp(gp.rightThumbstick().xAxis().value())),
             _clamp(gp.leftTrigger().value(),  0.0, 1.0),
             _clamp(gp.rightTrigger().value(), 0.0, 1.0),
-            bool(gp.leftShoulder().isPressed()),
-            bool(gp.rightShoulder().isPressed()),
         )
 
     def buzz(self, style: str):
@@ -316,7 +315,7 @@ def main():
                 continue
 
             # ── Inputs ───────────────────────────────────────────────────────
-            LY, RX, LT, RT, LB, RB = session.read()
+            LY, LX, RX, LT, RT = session.read()
 
             lt = LT > TRIG_PRESS
             rt = RT > TRIG_PRESS
@@ -336,8 +335,8 @@ def main():
                 fwdmax, rotmax = SPEED["base"]
 
             fwd    =  _clamp(LY) * fwdmax
-            strafe =  _clamp(RX) * fwdmax
-            rotate = -((1.0 if RB else 0.0) - (1.0 if LB else 0.0)) * rotmax
+            strafe =  _clamp(LX) * fwdmax
+            rotate =  _clamp(RX) * rotmax
 
             moving = abs(fwd) > 1e-3 or abs(strafe) > 1e-3 or abs(rotate) > 1e-3
 

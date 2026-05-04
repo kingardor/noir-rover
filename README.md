@@ -215,6 +215,8 @@ angular.z = rotation  (+ = clockwise)
 
 ## Controller (Xbox / PS5)
 
+**Left stick** — move (forward/back + strafe). Tilt diagonally for diagonal movement.  
+**Right stick X** — rotate.  
 Hold **L2** = precision mode (slow, fine control).  
 Hold **R2** = boost mode (full speed).  
 No trigger = base speed.
