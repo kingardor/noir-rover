@@ -1,0 +1,886 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NOIR // ROVER</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Orbitron:wght@700;900&display=swap" rel="stylesheet">
+  <style>
+    /* ── Design Tokens ─────────────────────────────────────────────────────── */
+    :root {
+      --bg:        #0A0A0F;
+      --card:      #12121A;
+      --card2:     #0D0D14;
+      --fg:        #D8D8E8;
+      --fg-dim:    #4A4A6A;
+      --accent:    #00FF88;
+      --cyan:      #00D4FF;
+      --magenta:   #CC00FF;
+      --red:       #FF3366;
+      --amber:     #FFB347;
+      --border:    #1E1E2E;
+      --border-hi: #2E2E4E;
+      --ch:        8px;
+
+      --glow-green:   0 0 8px rgba(0,255,136,.6),  0 0 24px rgba(0,255,136,.2);
+      --glow-cyan:    0 0 8px rgba(0,212,255,.6),  0 0 24px rgba(0,212,255,.2);
+      --glow-red:     0 0 8px rgba(255,51,102,.6),  0 0 24px rgba(255,51,102,.2);
+
+      --font-hd: 'Orbitron', sans-serif;
+      --font-bd: 'JetBrains Mono', monospace;
+    }
+
+    /* ── Reset ─────────────────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; overflow: hidden; }
+    body {
+      background: var(--bg);
+      color: var(--fg);
+      font-family: var(--font-bd);
+      font-size: 12px;
+      display: flex;
+      flex-direction: column;
+      height: 100dvh;
+    }
+
+    /* ── Scanlines overlay ─────────────────────────────────────────────────── */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background: repeating-linear-gradient(0deg, transparent, transparent 3px, rgba(0,0,0,.09) 3px, rgba(0,0,0,.09) 4px);
+      pointer-events: none;
+      z-index: 9999;
+    }
+
+    /* ── Chamfer utility ───────────────────────────────────────────────────── */
+    .ch {
+      clip-path: polygon(var(--ch) 0, calc(100% - var(--ch)) 0, 100% var(--ch), 100% calc(100% - var(--ch)), calc(100% - var(--ch)) 100%, var(--ch) 100%, 0 calc(100% - var(--ch)), 0 var(--ch));
+    }
+
+    /* ── Header ────────────────────────────────────────────────────────────── */
+    .hdr {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 0 18px;
+      height: 48px;
+      background: var(--card2);
+      border-bottom: 1px solid var(--border-hi);
+      flex-shrink: 0;
+      min-width: 0;
+    }
+
+    .logo {
+      font-family: var(--font-hd);
+      font-size: 15px;
+      font-weight: 900;
+      letter-spacing: .14em;
+      color: var(--accent);
+      text-shadow: var(--glow-green);
+      flex-shrink: 0;
+      white-space: nowrap;
+    }
+    .logo-sep { color: var(--fg-dim); margin: 0 4px; }
+
+    /* Status pills */
+    .hdr-pills { display: flex; gap: 6px; align-items: center; }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 9px 3px 7px;
+      font-size: 10px;
+      font-family: var(--font-bd);
+      font-weight: 500;
+      letter-spacing: .07em;
+      border: 1px solid var(--border-hi);
+      color: var(--fg-dim);
+      background: var(--card);
+      clip-path: polygon(5px 0,calc(100% - 5px) 0,100% 5px,100% calc(100% - 5px),calc(100% - 5px) 100%,5px 100%,0 calc(100% - 5px),0 5px);
+      transition: color 200ms, border-color 200ms, box-shadow 200ms;
+      white-space: nowrap;
+    }
+    .pill.ok   { color: var(--accent);  border-color: var(--accent);  box-shadow: 0 0 6px rgba(0,255,136,.12); }
+    .pill.err  { color: var(--red);     border-color: var(--red);     box-shadow: 0 0 6px rgba(255,51,102,.15); }
+    .pill.warn { color: var(--amber);   border-color: var(--amber);   box-shadow: 0 0 6px rgba(255,179,71,.12); }
+    .pill.info { color: var(--cyan);    border-color: var(--cyan);    box-shadow: 0 0 6px rgba(0,212,255,.12); }
+
+    .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.2} }
+    .dot.live { animation: blink 2s ease-in-out infinite; }
+
+    .hdr-spacer { flex: 1; }
+
+    /* E-STOP */
+    .estop {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 6px 16px;
+      font-family: var(--font-hd);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .12em;
+      color: var(--red);
+      background: transparent;
+      border: 1.5px solid var(--red);
+      cursor: pointer;
+      text-shadow: var(--glow-red);
+      box-shadow: 0 0 12px rgba(255,51,102,.15);
+      clip-path: polygon(5px 0,calc(100% - 5px) 0,100% 5px,100% calc(100% - 5px),calc(100% - 5px) 100%,5px 100%,0 calc(100% - 5px),0 5px);
+      transition: background 150ms, box-shadow 150ms;
+      flex-shrink: 0;
+    }
+    .estop:hover { background: rgba(255,51,102,.1); box-shadow: 0 0 22px rgba(255,51,102,.35); }
+    .estop:active { transform: scale(.97); }
+    .estop svg { width: 16px; height: 16px; flex-shrink: 0; }
+
+    /* ── Main grid ──────────────────────────────────────────────────────────── */
+    .main {
+      display: grid;
+      grid-template-columns: 1fr 300px;
+      gap: 10px;
+      padding: 10px;
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    /* ── Card base ──────────────────────────────────────────────────────────── */
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border-hi);
+      clip-path: polygon(var(--ch) 0,calc(100% - var(--ch)) 0,100% var(--ch),100% calc(100% - var(--ch)),calc(100% - var(--ch)) 100%,var(--ch) 100%,0 calc(100% - var(--ch)),0 var(--ch));
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .card-hdr {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 7px 12px;
+      border-bottom: 1px solid var(--border);
+      background: var(--card2);
+      font-family: var(--font-hd);
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: .18em;
+      color: var(--fg-dim);
+      flex-shrink: 0;
+    }
+    .card-hdr .hl { color: var(--accent); }
+
+    .badge {
+      font-family: var(--font-bd);
+      font-size: 10px;
+      padding: 1px 7px;
+      border: 1px solid var(--border-hi);
+      color: var(--fg-dim);
+      letter-spacing: .04em;
+    }
+    .badge.ok   { color: var(--accent); border-color: rgba(0,255,136,.4); }
+    .badge.live { color: var(--cyan);   border-color: rgba(0,212,255,.4); }
+
+    /* ── Left column ────────────────────────────────────────────────────────── */
+    .left { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+
+    /* Camera — grows to fill remaining space */
+    .cam-card { flex: 1; min-height: 0; }
+
+    .cam-body {
+      flex: 1;
+      position: relative;
+      background: #000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      min-height: 0;
+    }
+
+    #cam-img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+    }
+
+    /* HUD corner brackets */
+    .hud { position: absolute; inset: 0; pointer-events: none; }
+    .hud span {
+      position: absolute;
+      width: 18px; height: 18px;
+      border-color: var(--accent);
+      border-style: solid;
+      opacity: .65;
+      transition: opacity 300ms;
+    }
+    .cam-body:hover .hud span { opacity: 1; }
+    .hud .tl { top: 8px;    left: 8px;    border-width: 2px 0 0 2px; }
+    .hud .tr { top: 8px;    right: 8px;   border-width: 2px 2px 0 0; }
+    .hud .bl { bottom: 8px; left: 8px;    border-width: 0 0 2px 2px; }
+    .hud .br { bottom: 8px; right: 8px;   border-width: 0 2px 2px 0; }
+
+    .reticle {
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      width: 28px; height: 28px;
+      pointer-events: none;
+      opacity: .25;
+    }
+    .reticle::before, .reticle::after { content: ''; position: absolute; background: var(--accent); }
+    .reticle::before { width: 1px; height: 100%; left: 50%; transform: translateX(-50%); }
+    .reticle::after  { height: 1px; width: 100%; top: 50%; transform: translateY(-50%); }
+    .reticle-gap {
+      position: absolute; top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      width: 8px; height: 8px;
+      background: #000;
+      pointer-events: none; opacity: .25;
+    }
+
+    .cam-nosig {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      color: var(--fg-dim);
+    }
+    .cam-nosig svg { width: 40px; height: 40px; opacity: .3; }
+    .cam-nosig span { font-family: var(--font-hd); font-size: 10px; letter-spacing: .2em; }
+
+    /* Detections — FIXED height so camera never resizes */
+    .det-card {
+      height: 130px;       /* fixed: detections never push camera */
+      flex-shrink: 0;
+    }
+
+    .det-body {
+      padding: 6px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      overflow-y: auto;
+      flex: 1;
+      min-height: 0;
+    }
+
+    .det-row {
+      display: grid;
+      grid-template-columns: 96px 1fr 38px;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .det-name { font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+    .det-bar-bg {
+      height: 5px;
+      background: var(--border-hi);
+      clip-path: polygon(3px 0,calc(100% - 3px) 0,100% 3px,100% calc(100% - 3px),calc(100% - 3px) 100%,3px 100%,0 calc(100% - 3px),0 3px);
+    }
+    .det-bar {
+      height: 100%;
+      background: var(--accent);
+      box-shadow: 0 0 5px rgba(0,255,136,.5);
+      transition: width 300ms ease;
+    }
+    .det-pct { font-size: 10px; color: var(--accent); text-align: right; }
+    .det-empty { padding: 10px 12px; color: var(--fg-dim); font-size: 11px; text-align: center; letter-spacing: .05em; }
+
+    /* ── Right column ───────────────────────────────────────────────────────── */
+    .right { display: flex; flex-direction: column; gap: 10px; min-height: 0; overflow-y: auto; }
+
+    /* Sensor grid */
+    .sensor-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--border); }
+    .sensor-cell { background: var(--card); padding: 10px 12px; }
+
+    .s-lbl { font-family: var(--font-hd); font-size: 8px; font-weight: 700; letter-spacing: .18em; color: var(--fg-dim); margin-bottom: 4px; }
+    .s-val { font-size: 22px; font-weight: 500; line-height: 1; color: var(--cyan); text-shadow: var(--glow-cyan); }
+    .s-unit { font-size: 10px; color: var(--fg-dim); margin-left: 2px; }
+
+    /* Drive pad */
+    .drive-pad {
+      display: grid;
+      grid-template-columns: repeat(3, 48px);
+      grid-template-rows: repeat(3, 44px);
+      gap: 4px;
+      margin: 10px auto;
+    }
+    .dp-key {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      font-family: var(--font-hd);
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--fg-dim);
+      background: rgba(255,255,255,.02);
+      transition: all .08s;
+      user-select: none;
+      cursor: pointer;
+    }
+    .dp-key .dp-sub { font-size: 8px; letter-spacing: .06em; margin-top: 1px; opacity: .5; }
+    .dp-key.dp-active {
+      border-color: var(--cyan);
+      color: var(--cyan);
+      background: rgba(0,212,255,.12);
+      box-shadow: 0 0 10px rgba(0,212,255,.3);
+    }
+    .dp-key.dp-empty { border: none; background: none; cursor: default; }
+    .dp-center {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--border);
+      border-radius: 50%;
+      width: 48px;
+      height: 44px;
+      font-size: 18px;
+      color: var(--border);
+    }
+    .drive-hint { text-align: center; font-size: 10px; color: var(--fg-dim); letter-spacing: .05em; padding: 0 12px 10px; }
+    .drive-speed {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 14px 10px;
+      font-size: 10px;
+      color: var(--fg-dim);
+    }
+    .drive-speed input[type=range] { flex: 1; accent-color: var(--cyan); height: 3px; }
+    .drive-speed span { min-width: 28px; text-align: right; color: var(--cyan); }
+
+    /* Memory log */
+    .mem-list {
+      list-style: none;
+      padding: 8px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      overflow-y: auto;
+      flex: 1;
+    }
+    .mem-row {
+      display: grid;
+      grid-template-columns: 56px 1fr 36px;
+      align-items: baseline;
+      gap: 6px;
+      padding-bottom: 5px;
+      border-bottom: 1px solid var(--border);
+      font-size: 11px;
+    }
+    .mem-row:last-child { border-bottom: none; padding-bottom: 0; }
+    .mem-ts   { color: var(--fg-dim); font-size: 10px; }
+    .mem-lbl  { color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .mem-conf { color: var(--accent); text-align: right; font-size: 10px; }
+    .mem-empty { padding: 10px 12px; color: var(--fg-dim); font-size: 11px; text-align: center; letter-spacing: .05em; }
+
+    /* ── Safety bar ─────────────────────────────────────────────────────────── */
+    .safety {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 18px;
+      height: 34px;
+      background: var(--card2);
+      border-top: 1px solid var(--border-hi);
+      flex-shrink: 0;
+    }
+
+    .safety-title {
+      font-family: var(--font-hd);
+      font-size: 8px;
+      font-weight: 700;
+      letter-spacing: .22em;
+      color: var(--fg-dim);
+      flex-shrink: 0;
+    }
+
+    .s-indicators { display: flex; gap: 6px; flex: 1; }
+
+    .s-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 2px 9px;
+      font-size: 9px;
+      font-family: var(--font-bd);
+      letter-spacing: .06em;
+      border: 1px solid var(--border-hi);
+      color: var(--fg-dim);
+      clip-path: polygon(4px 0,calc(100% - 4px) 0,100% 4px,100% calc(100% - 4px),calc(100% - 4px) 100%,4px 100%,0 calc(100% - 4px),0 4px);
+      transition: all 200ms;
+      white-space: nowrap;
+    }
+    .s-pill svg { width: 10px; height: 10px; flex-shrink: 0; }
+    .s-pill.ok   { color: var(--accent); border-color: rgba(0,255,136,.4);  background: rgba(0,255,136,.04); }
+    .s-pill.err  { color: var(--red);    border-color: rgba(255,51,102,.5); background: rgba(255,51,102,.06); animation: spill-err 1.2s ease-in-out infinite; }
+    .s-pill.warn { color: var(--amber);  border-color: rgba(255,179,71,.4); background: rgba(255,179,71,.04); }
+
+    @keyframes spill-err { 0%,100%{ box-shadow: none; } 50%{ box-shadow: 0 0 8px rgba(255,51,102,.3); } }
+
+    .safety-ts { font-size: 10px; color: var(--fg-dim); letter-spacing: .04em; flex-shrink: 0; }
+
+    /* ── Scrollbars ─────────────────────────────────────────────────────────── */
+    ::-webkit-scrollbar { width: 3px; height: 3px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border-hi); }
+    ::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+  </style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════ HEADER ═══════════════════════════════════ -->
+<header class="hdr">
+  <div class="logo">NOIR<span class="logo-sep">//</span>ROVER</div>
+
+  <div class="hdr-pills">
+    <!-- ROS connection -->
+    <div class="pill" id="p-ros">
+      <span class="dot" id="dot-ros"></span>
+      <span id="t-ros">ROS</span>
+    </div>
+    <!-- Camera -->
+    <div class="pill" id="p-cam">
+      <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg>
+      <span id="t-cam">CAMERA</span>
+    </div>
+  </div>
+
+  <div class="hdr-spacer"></div>
+
+  <!-- E-STOP -->
+  <button class="estop" onclick="doEstop()" title="Emergency stop — halts all motion immediately">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+    E-STOP
+  </button>
+</header>
+
+<!-- ═══════════════════════════════ MAIN ═════════════════════════════════════ -->
+<div class="main">
+
+  <!-- ── Left column ─────────────────────────────────────────────────────── -->
+  <div class="left">
+
+    <!-- Camera feed -->
+    <div class="card cam-card">
+      <div class="card-hdr">
+        OPTICS <span class="hl">// FEED</span>
+        <span class="badge" id="b-age">-- ms</span>
+      </div>
+      <div class="cam-body" id="cam-body">
+        <img id="cam-img" alt="Robot camera feed" style="display:none">
+        <div class="cam-nosig" id="cam-nosig">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M16 16v1a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2m5.66 0H14a2 2 0 0 1 2 2v3.34l1 1L23 7v10"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+          <span>NO SIGNAL</span>
+        </div>
+        <div class="hud">
+          <span class="tl"></span><span class="tr"></span>
+          <span class="bl"></span><span class="br"></span>
+        </div>
+        <div class="reticle"></div>
+        <div class="reticle-gap"></div>
+      </div>
+    </div>
+
+    <!-- Detections — fixed height, never resizes camera -->
+    <div class="card det-card">
+      <div class="card-hdr">
+        DETECTIONS <span class="hl">// YOLOE</span>
+        <span class="badge" id="b-dets">0 objects</span>
+      </div>
+      <div id="det-body" class="det-body">
+        <div class="det-empty">NO ACTIVE DETECTIONS</div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ── Right column ────────────────────────────────────────────────────── -->
+  <div class="right">
+
+    <!-- Sensor array -->
+    <div class="card">
+      <div class="card-hdr">
+        SENSOR ARRAY
+        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+      </div>
+      <div class="sensor-grid">
+        <div class="sensor-cell">
+          <div class="s-lbl">RANGE</div>
+          <div class="s-val" id="s-range">--<span class="s-unit">m</span></div>
+        </div>
+        <div class="sensor-cell">
+          <div class="s-lbl">BATTERY</div>
+          <div class="s-val" id="s-bat">--<span class="s-unit">%</span></div>
+        </div>
+        <div class="sensor-cell">
+          <div class="s-lbl">ACCEL Z</div>
+          <div class="s-val" id="s-az">--<span class="s-unit">m/s²</span></div>
+        </div>
+        <div class="sensor-cell">
+          <div class="s-lbl">CHARGING</div>
+          <div class="s-val" id="s-chg" style="font-size:16px">--</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Manual drive -->
+    <div class="card">
+      <div class="card-hdr">
+        MANUAL DRIVE
+        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 19 21 12 17 5 21 12 2"/></svg>
+      </div>
+      <div class="drive-pad">
+        <div class="dp-key" id="dp-q">Q<span class="dp-sub">ROT ←</span></div>
+        <div class="dp-key" id="dp-w">W<span class="dp-sub">FWD</span></div>
+        <div class="dp-key" id="dp-e">E<span class="dp-sub">ROT →</span></div>
+        <div class="dp-key" id="dp-a">A<span class="dp-sub">LEFT</span></div>
+        <div class="dp-center">◈</div>
+        <div class="dp-key" id="dp-d">D<span class="dp-sub">RIGHT</span></div>
+        <div class="dp-key dp-empty"></div>
+        <div class="dp-key" id="dp-s">S<span class="dp-sub">BACK</span></div>
+        <div class="dp-key dp-empty"></div>
+      </div>
+      <div class="drive-speed">
+        <span>SPD</span>
+        <input type="range" id="drive-speed" min="10" max="100" value="60" oninput="document.getElementById('spd-val').textContent=this.value+'%'" title="Drive speed multiplier">
+        <span id="spd-val">60%</span>
+      </div>
+      <div class="drive-hint">WASD · Q/E rotate · hold to move</div>
+    </div>
+
+    <!-- Memory stream -->
+    <div class="card" style="flex:1;min-height:120px">
+      <div class="card-hdr">
+        MEMORY STREAM
+        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+      </div>
+      <ul class="mem-list" id="mem-list">
+        <li class="mem-empty">NO EVENTS RECORDED</li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═══════════════════════════════ SAFETY BAR ═══════════════════════════════ -->
+<!--
+  Arbiter indicators — what each pill means:
+  CTRL     : Controller input received in last 2 s (green=driving, grey=idle)
+  AGENT    : AI agent heartbeat is fresh (green=agent running, amber=agent offline)
+  MISSION  : Mission lock state (green=free/no mission, amber=mission name when active)
+  WATCHDOG : Bridge API is reachable and watchdog loop is active
+-->
+<footer class="safety">
+  <div class="safety-title">ARBITER</div>
+  <div class="s-indicators">
+    <div class="s-pill" id="sa-ctrl" title="Controller: active when a gamepad input was received in the last 2 seconds">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="12" x2="10" y2="12"/><line x1="8" y1="10" x2="8" y2="14"/><line x1="15" y1="13" x2="15.01" y2="13"/><line x1="18" y1="11" x2="18.01" y2="11"/><rect x="2" y="6" width="20" height="12" rx="2"/></svg>
+      <span id="sa-ctrl-lbl">CTRL</span>
+    </div>
+    <div class="s-pill" id="sa-agent" title="Agent heartbeat: the AI mission agent must send a heartbeat every second to allow autonomous movement">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/><path d="M3.22 12H9.5l1.5-3 1.5 4.5 1.5-2h3.28"/></svg>
+      <span id="sa-agent-lbl">AGENT</span>
+    </div>
+    <div class="s-pill" id="sa-mission" title="Mission lock: amber when a mission (voice/follow/patrol) is running and holds exclusive movement control">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+      <span id="sa-mission-lbl">FREE</span>
+    </div>
+    <div class="s-pill" id="sa-wd" title="Watchdog: the bridge safety loop publishes zero velocity if the agent stops sending movement commands">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+      <span id="sa-wd-lbl">WATCHDOG</span>
+    </div>
+  </div>
+  <div class="safety-ts" id="ts">--:--:--</div>
+</footer>
+
+<script>
+// ── Config ──────────────────────────────────────────────────────────────────
+const API = 'http://localhost:8012';
+
+// ── Camera MJPEG stream ──────────────────────────────────────────────────────
+const camImg   = document.getElementById('cam-img');
+const camNosig = document.getElementById('cam-nosig');
+
+function initCamera() {
+  camImg.src = `${API}/camera/stream`;
+  camImg.onload = () => { camImg.style.display = ''; camNosig.style.display = 'none'; };
+  camImg.onerror = () => { camImg.style.display = 'none'; camNosig.style.display = ''; setTimeout(initCamera, 3000); };
+}
+initCamera();
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+async function apiFetch(path) {
+  try {
+    const r = await fetch(`${API}${path}`, { signal: AbortSignal.timeout(2000) });
+    return r.ok ? r.json() : null;
+  } catch { return null; }
+}
+
+async function apiPost(path, body = {}) {
+  try {
+    const r = await fetch(`${API}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(3000),
+    });
+    return r.ok ? r.json() : null;
+  } catch { return null; }
+}
+
+function setPill(id, cls, text) {
+  const el = document.getElementById(id);
+  el.className = `pill ${cls}`;
+  const span = el.querySelector('span[id]');
+  if (span) span.textContent = text;
+}
+
+// ── Status ───────────────────────────────────────────────────────────────────
+async function pollStatus() {
+  const d = await apiFetch('/status');
+  if (!d) {
+    setPill('p-ros', 'err', 'OFFLINE');
+    document.getElementById('dot-ros').className = 'dot';
+    setPill('p-cam', 'err', 'OFFLINE');
+    return;
+  }
+
+  const rosOk = d.ros_connected;
+  setPill('p-ros', rosOk ? 'ok' : 'err', rosOk ? 'CONNECTED' : 'NO ROS');
+  document.getElementById('dot-ros').className = `dot ${rosOk ? 'live' : ''}`;
+
+  const camOk = d.camera_active;
+  setPill('p-cam', camOk ? 'info' : 'warn', camOk ? 'LIVE' : 'NO SIGNAL');
+
+  if (d.latest_frame_age_sec != null) {
+    document.getElementById('b-age').textContent = `${Math.round(d.latest_frame_age_sec * 1000)} ms`;
+  }
+}
+
+// ── Sensors ──────────────────────────────────────────────────────────────────
+async function pollSensors() {
+  const d = await apiFetch('/sensors');
+  if (!d) return;
+
+  const tof = d.tof_range_m;
+  document.getElementById('s-range').innerHTML =
+    tof != null ? `${tof.toFixed(2)}<span class="s-unit">m</span>` : `--<span class="s-unit">m</span>`;
+
+  const bat = d.battery?.percentage;
+  const batEl = document.getElementById('s-bat');
+  if (bat != null) {
+    const pct = Math.round(bat);
+    const [c, g] = pct > 50 ? ['var(--accent)', 'var(--glow-green)'] : pct > 20 ? ['var(--amber)', '0 0 8px rgba(255,179,71,.5)'] : ['var(--red)', 'var(--glow-red)'];
+    batEl.innerHTML = `<span style="color:${c};text-shadow:${g}">${pct}</span><span class="s-unit">%</span>`;
+  } else {
+    batEl.innerHTML = `--<span class="s-unit">%</span>`;
+  }
+
+  const az = d.imu?.linear_acceleration?.z;
+  document.getElementById('s-az').innerHTML =
+    az != null ? `${az.toFixed(1)}<span class="s-unit">m/s²</span>` : `--<span class="s-unit">m/s²</span>`;
+
+  const chg = d.battery?.charging;
+  document.getElementById('s-chg').innerHTML =
+    chg == null ? `--` : chg
+      ? `<span style="color:var(--accent);text-shadow:var(--glow-green)">YES</span>`
+      : `<span style="color:var(--fg-dim)">NO</span>`;
+}
+
+// ── Detections ───────────────────────────────────────────────────────────────
+async function pollDetections() {
+  const d    = await apiFetch('/perception/detections');
+  const body  = document.getElementById('det-body');
+  const badge = document.getElementById('b-dets');
+  const dets  = d?.detections || [];
+
+  badge.textContent = `${dets.length} object${dets.length !== 1 ? 's' : ''}`;
+  badge.className   = `badge ${dets.length ? 'ok' : ''}`;
+
+  if (!dets.length) {
+    body.innerHTML = '<div class="det-empty">NO ACTIVE DETECTIONS</div>';
+    return;
+  }
+
+  const sorted = [...dets].sort((a, b) => b.confidence - a.confidence).slice(0, 6);
+  body.innerHTML = sorted.map(det => {
+    const pct  = Math.round((det.confidence || 0) * 100);
+    const name = (det.label || det.name || '?').toUpperCase();
+    return `<div class="det-row">
+      <span class="det-name">${name}</span>
+      <div class="det-bar-bg"><div class="det-bar" style="width:${pct}%"></div></div>
+      <span class="det-pct">${pct}%</span>
+    </div>`;
+  }).join('');
+}
+
+// ── Safety ────────────────────────────────────────────────────────────────────
+function setSPillText(id, cls, label) {
+  const el  = document.getElementById(id);
+  el.className = `s-pill ${cls}`;
+  const txt = document.getElementById(`${id}-lbl`);
+  if (txt) txt.textContent = label;
+}
+
+let _bridgeAlive = false;
+
+async function pollSafety() {
+  const d = await apiFetch('/safety/state');
+
+  // Watchdog: bridge is reachable if we got a response
+  _bridgeAlive = d !== null;
+  setSPillText('sa-wd', _bridgeAlive ? 'ok' : 'err', _bridgeAlive ? 'WATCHDOG' : 'BRIDGE DOWN');
+
+  if (!d) return;
+
+  // Controller: active = a gamepad sent input in the last 2 s
+  setSPillText('sa-ctrl', d.xbox_active ? 'ok' : '',
+    d.xbox_active ? 'DRIVING' : 'CTRL');
+
+  // Agent heartbeat: must be fresh for AI missions to move the robot
+  setSPillText('sa-agent', d.heartbeat_ok ? 'ok' : 'warn',
+    d.heartbeat_ok ? 'AGENT' : 'AGENT OFFLINE');
+
+  // Mission lock: amber when a mission holds exclusive movement control
+  const mission = d.mission && d.mission !== 'idle' ? d.mission.toUpperCase() : null;
+  setSPillText('sa-mission', mission ? 'warn' : 'ok',
+    mission || 'FREE');
+
+  document.getElementById('ts').textContent =
+    new Date().toLocaleTimeString('en-US', { hour12: false });
+}
+
+// ── Memory ────────────────────────────────────────────────────────────────────
+async function pollMemory() {
+  const d      = await apiFetch('/memory/recent?n=8');
+  const list   = document.getElementById('mem-list');
+  const events = d?.events || [];
+
+  if (!events.length) {
+    list.innerHTML = '<li class="mem-empty">NO EVENTS RECORDED</li>';
+    return;
+  }
+
+  list.innerHTML = events.map(ev => {
+    const ts   = ev.ts ? new Date(ev.ts * 1000).toLocaleTimeString('en-US', { hour12: false }) : '--';
+    const conf = ev.conf ? `${Math.round(ev.conf * 100)}%` : '--';
+    const lbl  = (ev.label || '').toUpperCase();
+    return `<li class="mem-row">
+      <span class="mem-ts">${ts}</span>
+      <span class="mem-lbl">${lbl}</span>
+      <span class="mem-conf">${conf}</span>
+    </li>`;
+  }).join('');
+}
+
+// ── Toast ─────────────────────────────────────────────────────────────────────
+let _toastTimer = null;
+function toast(msg, ok = true) {
+  let el = document.getElementById('toast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'toast';
+    el.style.cssText = [
+      'position:fixed','bottom:48px','left:50%','transform:translateX(-50%)',
+      'padding:8px 18px','font-family:var(--font-bd)',
+      'font-size:11px','letter-spacing:.06em','z-index:9999',
+      'transition:opacity .3s','pointer-events:none',
+      'clip-path:polygon(5px 0,calc(100% - 5px) 0,100% 5px,100% calc(100% - 5px),calc(100% - 5px) 100%,5px 100%,0 calc(100% - 5px),0 5px)',
+    ].join(';');
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.style.background = ok ? 'rgba(0,212,255,.15)' : 'rgba(255,51,102,.15)';
+  el.style.border      = ok ? '1px solid var(--cyan)' : '1px solid var(--red)';
+  el.style.color       = ok ? 'var(--cyan)' : 'var(--red)';
+  el.style.opacity     = '1';
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => { el.style.opacity = '0'; }, 2500);
+}
+
+// ── Actions ───────────────────────────────────────────────────────────────────
+async function doEstop() {
+  await apiPost('/robot/stop');
+  await apiPost('/mission/stop');
+  toast('E-STOP sent');
+}
+
+// ── Manual drive (WASD + Q/E) ────────────────────────────────────────────────
+const _driveKeys = new Set();
+let _driveTimer = null;
+
+const _keyVec = {
+  w: {y:  0.4, x:  0,   r:  0},
+  s: {y: -0.4, x:  0,   r:  0},
+  a: {y:  0,   x: -0.4, r:  0},
+  d: {y:  0,   x:  0.4, r:  0},
+  q: {y:  0,   x:  0,   r: -4},
+  e: {y:  0,   x:  0,   r:  4},
+};
+
+function _sendDrive() {
+  let x = 0, y = 0, r = 0;
+  for (const k of _driveKeys) {
+    const v = _keyVec[k];
+    if (v) { x += v.x; y += v.y; r += v.r; }
+  }
+  const spd = parseInt(document.getElementById('drive-speed').value) / 100;
+  apiPost('/robot/move', {
+    x:           Math.max(-1.5, Math.min(1.5, x * spd)),
+    y:           Math.max(-1.5, Math.min(1.5, y * spd)),
+    rotate:      Math.max(-12,  Math.min(12,  r * spd)),
+    duration_ms: 150,
+    source:      'manual',
+  });
+}
+
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.repeat) return;
+  const k = e.key.toLowerCase();
+  if (!_keyVec[k]) return;
+  e.preventDefault();
+  _driveKeys.add(k);
+  document.getElementById(`dp-${k}`)?.classList.add('dp-active');
+  _sendDrive();
+  if (!_driveTimer) _driveTimer = setInterval(_sendDrive, 33);
+});
+
+document.addEventListener('keyup', e => {
+  const k = e.key.toLowerCase();
+  if (!_keyVec[k]) return;
+  _driveKeys.delete(k);
+  document.getElementById(`dp-${k}`)?.classList.remove('dp-active');
+  if (_driveKeys.size === 0) {
+    clearInterval(_driveTimer);
+    _driveTimer = null;
+    apiPost('/robot/move', {x: 0, y: 0, rotate: 0, duration_ms: 0, source: 'manual'});
+  }
+});
+
+// ── Poll loop ─────────────────────────────────────────────────────────────────
+function tick() {
+  pollStatus();
+  pollSensors();
+  pollDetections();
+  pollSafety();
+  pollMemory();
+}
+
+tick();
+setInterval(tick, 1000);
+</script>
+</body>
+</html>
