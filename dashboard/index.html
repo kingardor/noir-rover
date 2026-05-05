@@ -139,7 +139,7 @@
     /* ── Main grid ──────────────────────────────────────────────────────────── */
     .main {
       display: grid;
-      grid-template-columns: 1fr 300px;
+      grid-template-columns: 1fr 380px;
       gap: 10px;
       padding: 10px;
       flex: 1;
@@ -312,8 +312,13 @@
     .det-pct { font-size: 10px; color: var(--accent); text-align: right; }
     .det-empty { padding: 10px 12px; color: var(--fg-dim); font-size: 11px; text-align: center; letter-spacing: .05em; }
 
-    /* ── Right column ───────────────────────────────────────────────────────── */
-    .right { display: flex; flex-direction: column; gap: 10px; min-height: 0; overflow-y: auto; }
+    /* ── Left bottom row (sensors + drive side by side) ────────────────────── */
+    .left-bottom { display: flex; gap: 10px; flex-shrink: 0; height: 210px; }
+    .left-bottom .card { min-width: 0; }
+    .left-bottom .sensor-grid { grid-template-columns: repeat(5, 1fr); }
+
+    /* ── Right column — full-height chat ─────────────────────────────────────*/
+    .right { display: flex; flex-direction: column; min-height: 0; }
 
     /* Sensor grid */
     .sensor-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1px; background: var(--border); }
@@ -614,88 +619,92 @@
 
     </div>
 
+    <!-- Sensors + manual drive — fixed-height bottom row -->
+    <div class="left-bottom">
+
+      <!-- Sensor array -->
+      <div class="card">
+        <div class="card-hdr">
+          SENSOR ARRAY
+          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        </div>
+        <div class="sensor-grid">
+          <div class="sensor-cell">
+            <div class="s-lbl">RANGE</div>
+            <div class="s-val" id="s-range">--<span class="s-unit">m</span></div>
+          </div>
+          <div class="sensor-cell">
+            <div class="s-lbl">BATTERY</div>
+            <div class="s-val" id="s-bat">--<span class="s-unit">%</span> <span class="s-unit" id="s-chg"></span></div>
+          </div>
+          <div class="sensor-cell">
+            <div class="s-lbl">ACCEL X</div>
+            <div class="s-val" id="s-ax">--<span class="s-unit">m/s²</span></div>
+          </div>
+          <div class="sensor-cell">
+            <div class="s-lbl">ACCEL Y</div>
+            <div class="s-val" id="s-ay">--<span class="s-unit">m/s²</span></div>
+          </div>
+          <div class="sensor-cell">
+            <div class="s-lbl">ACCEL Z</div>
+            <div class="s-val" id="s-az">--<span class="s-unit">m/s²</span></div>
+          </div>
+          <div class="sensor-cell">
+            <div class="s-lbl">GYRO Z</div>
+            <div class="s-val" id="s-gz">--<span class="s-unit">rad/s</span></div>
+          </div>
+          <div class="sensor-cell">
+            <div class="s-lbl">POS X</div>
+            <div class="s-val" id="s-vx">--<span class="s-unit">m</span></div>
+          </div>
+          <div class="sensor-cell">
+            <div class="s-lbl">POS Y</div>
+            <div class="s-val" id="s-vy">--<span class="s-unit">m</span></div>
+          </div>
+          <div class="sensor-cell">
+            <div class="s-lbl">SPEED</div>
+            <div class="s-val" id="s-spd">--<span class="s-unit">m/s</span></div>
+          </div>
+          <div class="sensor-cell">
+            <div class="s-lbl">YAW RATE</div>
+            <div class="s-val" id="s-yr">--<span class="s-unit">rad/s</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Manual drive -->
+      <div class="card">
+        <div class="card-hdr">
+          MANUAL DRIVE
+          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 19 21 12 17 5 21 12 2"/></svg>
+        </div>
+        <div class="drive-pad">
+          <div class="dp-key" id="dp-q">Q<span class="dp-sub">ROT ←</span></div>
+          <div class="dp-key" id="dp-w">W<span class="dp-sub">FWD</span></div>
+          <div class="dp-key" id="dp-e">E<span class="dp-sub">ROT →</span></div>
+          <div class="dp-key" id="dp-a">A<span class="dp-sub">LEFT</span></div>
+          <div class="dp-center">◈</div>
+          <div class="dp-key" id="dp-d">D<span class="dp-sub">RIGHT</span></div>
+          <div class="dp-key dp-empty"></div>
+          <div class="dp-key" id="dp-s">S<span class="dp-sub">BACK</span></div>
+          <div class="dp-key dp-empty"></div>
+        </div>
+        <div class="drive-speed">
+          <span>SPD</span>
+          <input type="range" id="drive-speed" min="10" max="100" value="60" oninput="document.getElementById('spd-val').textContent=this.value+'%'" title="Drive speed multiplier">
+          <span id="spd-val">60%</span>
+        </div>
+        <div class="drive-hint">WASD · Q/E rotate · hold to move</div>
+      </div>
+
+    </div>
+
   </div>
 
-  <!-- ── Right column ────────────────────────────────────────────────────── -->
+  <!-- ── Right column — full-height Noir chat ──────────────────────────── -->
   <div class="right">
 
-    <!-- Sensor array -->
-    <div class="card">
-      <div class="card-hdr">
-        SENSOR ARRAY
-        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-      </div>
-      <div class="sensor-grid">
-        <div class="sensor-cell">
-          <div class="s-lbl">RANGE</div>
-          <div class="s-val" id="s-range">--<span class="s-unit">m</span></div>
-        </div>
-        <div class="sensor-cell">
-          <div class="s-lbl">BATTERY</div>
-          <div class="s-val" id="s-bat">--<span class="s-unit">%</span> <span class="s-unit" id="s-chg"></span></div>
-        </div>
-        <div class="sensor-cell">
-          <div class="s-lbl">ACCEL X</div>
-          <div class="s-val" id="s-ax">--<span class="s-unit">m/s²</span></div>
-        </div>
-        <div class="sensor-cell">
-          <div class="s-lbl">ACCEL Y</div>
-          <div class="s-val" id="s-ay">--<span class="s-unit">m/s²</span></div>
-        </div>
-        <div class="sensor-cell">
-          <div class="s-lbl">ACCEL Z</div>
-          <div class="s-val" id="s-az">--<span class="s-unit">m/s²</span></div>
-        </div>
-        <div class="sensor-cell">
-          <div class="s-lbl">GYRO Z</div>
-          <div class="s-val" id="s-gz">--<span class="s-unit">rad/s</span></div>
-        </div>
-        <div class="sensor-cell">
-          <div class="s-lbl">POS X</div>
-          <div class="s-val" id="s-vx">--<span class="s-unit">m</span></div>
-        </div>
-        <div class="sensor-cell">
-          <div class="s-lbl">POS Y</div>
-          <div class="s-val" id="s-vy">--<span class="s-unit">m</span></div>
-        </div>
-        <div class="sensor-cell">
-          <div class="s-lbl">SPEED</div>
-          <div class="s-val" id="s-spd">--<span class="s-unit">m/s</span></div>
-        </div>
-        <div class="sensor-cell">
-          <div class="s-lbl">YAW RATE</div>
-          <div class="s-val" id="s-yr">--<span class="s-unit">rad/s</span></div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Manual drive -->
-    <div class="card">
-      <div class="card-hdr">
-        MANUAL DRIVE
-        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 19 21 12 17 5 21 12 2"/></svg>
-      </div>
-      <div class="drive-pad">
-        <div class="dp-key" id="dp-q">Q<span class="dp-sub">ROT ←</span></div>
-        <div class="dp-key" id="dp-w">W<span class="dp-sub">FWD</span></div>
-        <div class="dp-key" id="dp-e">E<span class="dp-sub">ROT →</span></div>
-        <div class="dp-key" id="dp-a">A<span class="dp-sub">LEFT</span></div>
-        <div class="dp-center">◈</div>
-        <div class="dp-key" id="dp-d">D<span class="dp-sub">RIGHT</span></div>
-        <div class="dp-key dp-empty"></div>
-        <div class="dp-key" id="dp-s">S<span class="dp-sub">BACK</span></div>
-        <div class="dp-key dp-empty"></div>
-      </div>
-      <div class="drive-speed">
-        <span>SPD</span>
-        <input type="range" id="drive-speed" min="10" max="100" value="60" oninput="document.getElementById('spd-val').textContent=this.value+'%'" title="Drive speed multiplier">
-        <span id="spd-val">60%</span>
-      </div>
-      <div class="drive-hint">WASD · Q/E rotate · hold to move</div>
-    </div>
-
-    <!-- Noir agent chat -->
-    <div class="card" style="flex:2;min-height:200px;display:flex;flex-direction:column;">
+    <div class="card" style="flex:1;display:flex;flex-direction:column;">
       <div class="card-hdr">
         NOIR <span class="hl">// AGENT</span>
         <button class="noir-reset" id="noir-reset" title="Clear conversation history">RESET</button>
@@ -705,17 +714,6 @@
         <input id="noir-input" type="text" placeholder="ask noir something…" autocomplete="off">
         <button class="noir-send" id="noir-send">SEND</button>
       </div>
-    </div>
-
-    <!-- Memory stream -->
-    <div class="card" style="flex:1;min-height:100px">
-      <div class="card-hdr">
-        MEMORY STREAM
-        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
-      </div>
-      <ul class="mem-list" id="mem-list">
-        <li class="mem-empty">NO EVENTS RECORDED</li>
-      </ul>
     </div>
 
   </div>
@@ -1178,9 +1176,11 @@ function noirAppend(role, text, calls) {
   if (calls && calls.length) {
     const ct = document.createElement('div');
     ct.className = 'noir-calls';
-    ct.innerHTML = calls.map(c =>
-      `→ ${c.name}(${Object.keys(c.args||{}).length ? JSON.stringify(c.args) : ''})`
-    ).join('<br>');
+    ct.innerHTML = calls.map(c => {
+      const argsStr = Object.keys(c.args || {}).length ? JSON.stringify(c.args) : '';
+      const resultStr = c.result != null ? JSON.stringify(c.result) : '';
+      return `→ ${c.name}(${argsStr})${resultStr ? `<br>&nbsp;&nbsp;↳ ${resultStr}` : ''}`;
+    }).join('<br>');
     wrap.appendChild(ct);
   }
   noirLog.appendChild(wrap);
@@ -1257,7 +1257,6 @@ function tick() {
   pollSensors();
   pollDetections();
   pollSafety();
-  pollMemory();
   pollFollow();
 }
 

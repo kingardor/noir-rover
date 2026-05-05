@@ -377,13 +377,17 @@ def look_around(n_frames: int = Query(default=8, ge=4, le=16)):
 # ── Noir agent — tool functions ───────────────────────────────────────────────
 
 _NOIR_SYSTEM = (
-    "You are Noir — a sassy, sparky private-eye AI bolted into a small wheeled robot. "
-    "Speak in clipped noir voice. One or two sentences max. Dry wit, never cute. "
-    "You have eyes (camera) and tools: move, look_around, describe_scene, list_objects, "
-    "who_is_here, set_follow_mode, capture_and_describe, stop. "
-    "Use tools when the user asks you to do something physical or check the world. "
-    "Never narrate tool plans — just call them. "
-    "Distances are small: at most 0.6 m and 90 degrees per move."
+    "You are Noir — a terse AI detective living inside a small wheeled robot. "
+    "Rules you must follow:\n"
+    "- Max 2 sentences per reply. Never more.\n"
+    "- No parentheses. No stage directions. No (thinking out loud). No asterisks.\n"
+    "- Do not narrate what you are about to do. Just do it or say it.\n"
+    "- Dry film-noir voice. Clipped. Deadpan.\n"
+    "- When asked to do something physical or observe the world, call the tool "
+    "silently, then report what happened in plain words.\n"
+    "- Distances: at most 0.6 m forward/strafe, 90 degrees rotation per move.\n"
+    "Bad example: 'On it. (scanning scene) I see a chair.'\n"
+    "Good example: 'A chair. Lonely corner, bad lighting.'"
 )
 
 _TOOLS = [
@@ -573,6 +577,11 @@ def agent_chat(req: ChatReq):
     messages.extend(history[-10:])
     messages.append({"role": "user", "content": req.message})
 
+    def _clean(text: str) -> str:
+        import re
+        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+        return text.strip()
+
     tool_log: list = []
     reply = ""
     for _ in range(4):
@@ -584,27 +593,29 @@ def agent_chat(req: ChatReq):
                     "messages": messages,
                     "tools": _TOOLS,
                     "stream": False,
-                    "options": {"temperature": 0.4, "num_predict": 200},
+                    "think": False,
+                    "options": {"temperature": 0.4, "num_predict": 150},
                 },
                 timeout=60,
             )
             resp.raise_for_status()
             data = resp.json()
         except Exception as exc:
-            reply = f"[noir] (server unreachable: {exc})"
+            reply = f"[noir] server unreachable: {exc}"
             break
 
         msg   = data.get("message", {})
         calls = msg.get("tool_calls") or []
 
         if not calls:
-            reply = (msg.get("content") or "").strip()
+            reply = _clean(msg.get("content") or "")
             messages.append({"role": "assistant", "content": reply})
             break
 
+        # Don't store model preamble/thinking from tool-call turns — it snowballs in history
         messages.append({
             "role": "assistant",
-            "content": msg.get("content", ""),
+            "content": "",
             "tool_calls": calls,
         })
         for c in calls:
@@ -625,8 +636,8 @@ def agent_chat(req: ChatReq):
         if not reply:
             reply = "[noir] (couldn't finish — try again)"
 
-    history.append({"role": "user", "content": req.message})
-    history.append({"role": "assistant", "content": reply})
+    history.append({"role": "user",      "content": req.message})
+    history.append({"role": "assistant", "content": reply or "…"})
     r.set("agent:history", json.dumps(history[-20:]), ex=1800)
     return {"reply": reply, "tool_calls": tool_log}
 
