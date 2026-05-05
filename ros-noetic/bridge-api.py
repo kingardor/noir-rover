@@ -24,7 +24,7 @@ _REDIS_URL        = os.environ.get("REDIS_URL",        "redis://localhost:6380")
 _OLLAMA_URL       = os.environ.get("OLLAMA_URL",       "http://localhost:11434")
 _OPENROUTER_URL   = "https://openrouter.ai/api/v1/chat/completions"
 _OPENROUTER_KEY   = os.environ.get("OPENROUTER_API_KEY", "")
-_AGENT_MODEL      = os.environ.get("AGENT_MODEL",      "nvidia/nemotron-3-nano-30b-a3b:free")
+_AGENT_MODEL      = os.environ.get("AGENT_MODEL",      "nvidia/nemotron-nano-12b-v2-vl:free")
 _r: Optional[redis_lib.Redis] = None
 
 
