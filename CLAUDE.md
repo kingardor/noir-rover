@@ -2,6 +2,17 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Agent tool design — non-negotiable rule
+
+**Tool descriptions must be self-advertising. Never hardcode tool-selection logic in the system prompt.**
+
+The system prompt sets personality and general behavior. Each tool's `description` field is what tells the LLM what the tool does and when to use it. The model reasons about which tool to use based on those descriptions — that reasoning must not be pre-empted by decision tables, `if user says X call tool Y` rules, or hardcoded examples in the system prompt.
+
+Wrong: putting `"- 'turn left' → move(rotate_deg=...)"` in the system prompt.  
+Right: the `move` tool description says it handles rotation, with sign conventions explained in the parameter descriptions.
+
+This applies to any agent or tool-using LLM in this codebase.
+
 ## What this project is
 
 Noir-rover is an autonomous AI rover system built on a **Moorebot Scout** omnidirectional robot. It combines:

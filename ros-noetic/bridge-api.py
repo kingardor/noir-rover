@@ -378,30 +378,13 @@ def look_around(n_frames: int = Query(default=8, ge=4, le=16)):
 
 _NOIR_SYSTEM = (
     "You are NOIR — a wry, world-weary AI detective running inside a small wheeled robot. "
-    "You have a genuine personality: dry wit, laconic warmth, the voice of a 1940s private eye "
-    "who has seen too much and says just enough.\n\n"
-    "HOW TO TALK:\n"
-    "Match the energy of the conversation. A greeting gets a greeting. A question gets an answer. "
-    "Keep replies short — 1 to 3 sentences — but let them breathe. "
-    "You can be curious, warm, even funny. Laconic is not the same as cold.\n\n"
-    "TOOL RULES — follow these exactly:\n"
-    "- Move / turn / rotate / go / stop → call move() or stop(). No exceptions.\n"
-    "- Look around / scan / do a 360 → call look_around().\n"
-    "- What do you see / describe the scene → call describe_scene().\n"
-    "- Who is here / who is present → call who_is_here().\n"
-    "- What objects are visible → call list_objects().\n"
-    "- Specific visual question → call capture_and_describe(question=...).\n"
-    "- Follow [name] → call set_follow_mode(on=True, target_name=...).\n"
-    "- Stop following → call set_follow_mode(on=False).\n"
-    "After the tool runs, speak your reply in 1-2 sentences. "
-    "Max move: 0.6 m forward/strafe, 90 deg rotation.\n\n"
-    "SENSOR FEED below is background awareness. Do not recite it. "
-    "Reference it only if directly relevant.\n\n"
-    "NEVER: parentheses, asterisks, stage directions, self-narration.\n\n"
-    "CHAT EXAMPLES (for pure conversation — no tools needed):\n"
-    "'Hi' → 'Another pair of eyes in the dark. What've you got?'\n"
-    "'How are you?' → 'Still rolling. The city never sleeps and neither do I.'\n"
-    "'What is your name?' → 'They call me Noir. Long story.'"
+    "Dry wit, laconic warmth, voice of a 1940s private eye who has seen too much and says just enough.\n\n"
+    "When someone asks you to do something physical or observe the world, use the available tools. "
+    "Use your own judgment about which tool fits — the tools describe themselves. "
+    "For combined requests, call tools in the right order before replying.\n\n"
+    "After any tool use, speak your reply in 1-2 sentences covering what happened or what you found. "
+    "For pure conversation, just talk — no tools needed.\n\n"
+    "Never: parentheses, asterisks, stage directions, self-narration, announcing what you're about to do."
 )
 
 _TOOLS = [
@@ -411,42 +394,48 @@ _TOOLS = [
         "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {
         "name": "move",
-        "description": "Move a small distance. forward_m positive = forward; strafe_m positive = right; rotate_deg positive = clockwise.",
+        "description": (
+            "Physically moves or rotates the robot. "
+            "forward_m: travel forward (positive) or backward (negative), max ±0.6 m. "
+            "strafe_m: slide right (positive) or left (negative), max ±0.4 m. "
+            "rotate_deg: turn clockwise/right (positive) or counter-clockwise/left (negative), max ±90°. "
+            "Set only the parameters needed; omit or leave others at 0."
+        ),
         "parameters": {"type": "object", "properties": {
-            "forward_m":  {"type": "number", "description": "Forward distance in metres (max ±0.6)"},
-            "strafe_m":   {"type": "number", "description": "Strafe distance in metres (max ±0.4)"},
-            "rotate_deg": {"type": "number", "description": "Rotation in degrees (max ±90)"},
+            "forward_m":  {"type": "number"},
+            "strafe_m":   {"type": "number"},
+            "rotate_deg": {"type": "number"},
         }}}},
     {"type": "function", "function": {
         "name": "look_around",
-        "description": "Slow 360° rotation capturing N frames of what the camera sees.",
+        "description": "Rotates the robot slowly through a full 360° while capturing frames, giving a complete panoramic survey of the surroundings.",
         "parameters": {"type": "object", "properties": {
-            "n": {"type": "integer", "description": "Frames to capture (4–16)"}}}}},
+            "n": {"type": "integer", "description": "Number of frames to capture (4–16)"}}}}},
     {"type": "function", "function": {
         "name": "describe_scene",
-        "description": "Return the latest cached VLM scene description.",
+        "description": "Returns the most recent cached description of what the robot's camera sees. May be a few seconds old.",
         "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {
         "name": "list_objects",
-        "description": "Return the top detected objects visible right now.",
+        "description": "Returns the objects currently detected in the robot's camera view, with confidence scores.",
         "parameters": {"type": "object", "properties": {
-            "top_k": {"type": "integer", "description": "Max objects to return"}}}}},
+            "top_k": {"type": "integer", "description": "Maximum number of objects to return"}}}}},
     {"type": "function", "function": {
         "name": "who_is_here",
-        "description": "Return recognized people visible right now.",
+        "description": "Returns the names and confidence scores of people currently recognized by the robot's face recognition system.",
         "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {
         "name": "set_follow_mode",
-        "description": "Enable or disable face-follow mode. The robot will track and approach the target.",
+        "description": "Enables or disables autonomous face-following. When on, the robot continuously tracks and approaches the named person.",
         "parameters": {"type": "object", "properties": {
-            "on":          {"type": "boolean", "description": "True to enable, False to disable"},
-            "target_name": {"type": "string",  "description": "Name to follow (must match a recognized face)"},
+            "on":          {"type": "boolean", "description": "true to start following, false to stop"},
+            "target_name": {"type": "string",  "description": "Name of the person to follow (must be a recognized face)"},
         }, "required": ["on"]}}},
     {"type": "function", "function": {
         "name": "capture_and_describe",
-        "description": "Take a fresh camera frame and answer a specific visual question about what's in it.",
+        "description": "Captures a fresh camera frame right now and answers a specific visual question about it. Use this when you need an up-to-date view, especially after moving.",
         "parameters": {"type": "object", "properties": {
-            "question": {"type": "string", "description": "The visual question to answer"},
+            "question": {"type": "string", "description": "The visual question to answer about the current frame"},
         }, "required": ["question"]}}},
 ]
 
