@@ -1195,6 +1195,18 @@ function noirAppendThinking() {
   return wrap;
 }
 
+async function chatPost(path, body) {
+  try {
+    const r = await fetch(`${API}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(90000),
+    });
+    return r.ok ? r.json() : null;
+  } catch { return null; }
+}
+
 async function noirSend() {
   const text = noirInput.value.trim();
   if (!text || _noirBusy) return;
@@ -1202,95 +1214,21 @@ async function noirSend() {
   _noirBusy = true;
   noirInput.disabled = true;
   noirAppend('user', text);
-
-  // Build NOIR response element upfront — populated live via SSE
-  const wrap = document.createElement('div');
-  wrap.className = 'noir-msg';
-  const whoEl = document.createElement('div');
-  whoEl.className = 'noir-who noir';
-  whoEl.textContent = 'NOIR';
-  wrap.appendChild(whoEl);
-  const thinkEl = document.createElement('div');
-  thinkEl.className = 'noir-thinking';
-  thinkEl.innerHTML = '<span></span><span></span><span></span>';
-  wrap.appendChild(thinkEl);
-  const callsEl = document.createElement('div');
-  callsEl.className = 'noir-calls';
-  wrap.appendChild(callsEl);
-  const bodyEl = document.createElement('div');
-  bodyEl.className = 'noir-body';
-  wrap.appendChild(bodyEl);
-  noirLog.appendChild(wrap);
-  noirLog.scrollTop = noirLog.scrollHeight;
-
-  const toolCalls = [];   // [{name, el}] — for matching results to starts
-
-  try {
-    const resp = await fetch(`${API}/agent/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: text }),
-      signal: AbortSignal.timeout(120000),
-    });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-
-    const reader = resp.body.getReader();
-    const dec = new TextDecoder();
-    let buf = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      // SSE chunks are delimited by double newline
-      const parts = buf.split('\n\n');
-      buf = parts.pop();   // keep any incomplete trailing chunk
-      for (const part of parts) {
-        for (const line of part.split('\n')) {
-          if (!line.startsWith('data: ')) continue;
-          let ev;
-          try { ev = JSON.parse(line.slice(6)); } catch { continue; }
-
-          if (ev.t === 'tool_start') {
-            thinkEl.style.display = 'none';
-            const argsStr = ev.args && Object.keys(ev.args).length ? JSON.stringify(ev.args) : '';
-            const div = document.createElement('div');
-            div.innerHTML = `→ <b>${ev.name}</b>(${argsStr}) <span class="tool-spin">↻</span>`;
-            callsEl.appendChild(div);
-            toolCalls.push({ name: ev.name, el: div });
-            noirLog.scrollTop = noirLog.scrollHeight;
-
-          } else if (ev.t === 'tool_result') {
-            const entry = [...toolCalls].reverse().find(t => t.name === ev.name);
-            if (entry) {
-              const spin = entry.el.querySelector('.tool-spin');
-              if (spin) spin.remove();
-              const rs = ev.result != null ? JSON.stringify(ev.result) : '';
-              if (rs) entry.el.innerHTML += `<br>&nbsp;&nbsp;↳ ${rs}`;
-            }
-            noirLog.scrollTop = noirLog.scrollHeight;
-
-          } else if (ev.t === 'text') {
-            thinkEl.style.display = 'none';
-            bodyEl.textContent += ev.v;
-            noirLog.scrollTop = noirLog.scrollHeight;
-
-          } else if (ev.t === 'done') {
-            thinkEl.style.display = 'none';
-          }
-        }
-      }
-    }
-  } catch {
-    thinkEl.style.display = 'none';
-    bodyEl.textContent = '[no response — bridge down?]';
-    bodyEl.className += ' noir-err';
-  }
-
-  thinkEl.style.display = 'none';
+  const thinking = noirAppendThinking();
+  const data = await chatPost('/agent/chat', { message: text });
+  thinking.remove();
   _noirBusy = false;
   noirInput.disabled = false;
   noirInput.focus();
+  if (data) {
+    noirAppend('noir', data.reply || '…', data.tool_calls);
+  } else {
+    const wrap = document.createElement('div');
+    wrap.className = 'noir-msg';
+    wrap.innerHTML = '<div class="noir-who noir">NOIR</div><div class="noir-err">[no response — bridge down?]</div>';
+    noirLog.appendChild(wrap);
+    noirLog.scrollTop = noirLog.scrollHeight;
+  }
 }
 
 document.getElementById('noir-send').addEventListener('click', noirSend);

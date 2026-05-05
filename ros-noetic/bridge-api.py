@@ -476,10 +476,11 @@ def _tool_rotate(rotate_deg: float) -> dict:
     # Use Twist-based timing — same mechanism as the controller (algo_roll is unreliable).
     rot_speed = 3.0  # rad/s
     duration_s = abs(math.radians(rotate_deg)) / rot_speed
-    direction = math.copysign(1.0, rotate_deg)
+    # Scout firmware: positive angular.z = left/CCW — negate so positive rotate_deg = right/CW
+    direction = -math.copysign(1.0, rotate_deg)
     _set_vel(0.0, 0.0, direction * rot_speed, duration_s)
     ros.publish_twist(0.0, 0.0, direction * rot_speed)
-    time.sleep(duration_s + 0.15)  # wait for hold to expire naturally
+    time.sleep(duration_s + 0.15)  # wait for hold to expire
     return {"rotate_deg": rotate_deg, "ok": True}
 
 
@@ -576,8 +577,8 @@ class ChatReq(BaseModel):
     message: str
 
 
-def _agent_stream(req_message: str):
-    """Sync generator yielding SSE events for the agent tool loop."""
+@app.post("/agent/chat")
+def agent_chat(req: ChatReq):
     r = _redis()
     history: list = json.loads(r.get("agent:history") or "[]")
 
@@ -603,7 +604,7 @@ def _agent_stream(req_message: str):
 
     messages: list = [{"role": "system", "content": sys_content}]
     messages.extend(history[-10:])
-    messages.append({"role": "user", "content": req_message})
+    messages.append({"role": "user", "content": req.message})
 
     or_headers = {
         "Authorization": f"Bearer {_OPENROUTER_KEY}",
@@ -612,9 +613,7 @@ def _agent_stream(req_message: str):
         "X-Title":       "Noir Rover",
     }
 
-    def _sse(payload: dict) -> str:
-        return f"data: {json.dumps(payload)}\n\n"
-
+    tool_log: list = []
     reply = ""
     for _ in range(4):
         try:
@@ -635,7 +634,6 @@ def _agent_stream(req_message: str):
             data = resp.json()
         except Exception as exc:
             reply = f"[noir] unreachable: {exc}"
-            yield _sse({"t": "text", "v": reply})
             break
 
         msg   = (data.get("choices") or [{}])[0].get("message", {})
@@ -645,7 +643,6 @@ def _agent_stream(req_message: str):
             reply = (msg.get("content") or "").strip()
             print(f"[agent] reply: {reply!r}", flush=True)
             messages.append({"role": "assistant", "content": reply})
-            yield _sse({"t": "text", "v": reply})
             break
 
         messages.append({
@@ -662,12 +659,11 @@ def _agent_stream(req_message: str):
                     args = json.loads(args)
                 except Exception:
                     args = {}
-            yield _sse({"t": "tool_start", "name": fn, "args": args})
             try:
                 result = _TOOL_DISPATCH[fn](**args) if fn in _TOOL_DISPATCH else {"error": f"unknown_tool:{fn}"}
             except Exception as exc:
                 result = {"error": str(exc)}
-            yield _sse({"t": "tool_result", "name": fn, "result": result})
+            tool_log.append({"name": fn, "args": args, "result": result})
             messages.append({
                 "role":         "tool",
                 "tool_call_id": tc_id,
@@ -676,21 +672,11 @@ def _agent_stream(req_message: str):
     else:
         if not reply:
             reply = "[noir] hit iteration limit — try again"
-            yield _sse({"t": "text", "v": reply})
 
-    history.append({"role": "user",      "content": req_message})
+    history.append({"role": "user",      "content": req.message})
     history.append({"role": "assistant", "content": reply or "…"})
     r.set("agent:history", json.dumps(history[-20:]), ex=1800)
-    yield _sse({"t": "done"})
-
-
-@app.post("/agent/chat")
-def agent_chat(req: ChatReq):
-    return StreamingResponse(
-        _agent_stream(req.message),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
+    return {"reply": reply, "tool_calls": tool_log}
 
 
 @app.post("/agent/reset")
