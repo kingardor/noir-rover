@@ -207,6 +207,10 @@ class ScoutROS:
         except Exception:
             return False
 
+    @property
+    def last_frame_ts(self) -> Optional[float]:
+        return _last_frame_ts
+
     def get_latest_frame(self) -> Optional[bytes]:
         with _camera_lock:
             return _camera_data[0] if _camera_data else None

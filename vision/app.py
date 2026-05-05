@@ -2,9 +2,9 @@
 """
 YOLOE continuous detection loop — native macOS, Metal/MPS.
 
-Reads frames from the bridge API, runs YOLOE zero-shot detection,
-publishes to Redis:
-  vision:latest              JSON {frame_id, ts, detections, frame_w, frame_h}  TTL 2s
+Reads frames from Redis (camera:frame written by bridge),
+runs YOLOE zero-shot detection, publishes to Redis:
+  vision:latest              JSON {frame_id, ts, detections, frame_w, frame_h}  TTL 10s
   vision:thumb:{frame_id}    base64 JPEG                                         TTL 60s
   vision:events  (pubsub)    frame_id string
 
@@ -19,7 +19,6 @@ import time
 import cv2
 import numpy as np
 import redis
-import requests
 from PIL import Image
 from ultralytics import YOLOE
 
@@ -28,7 +27,6 @@ from ultralytics import YOLOE
 _HERE      = os.path.dirname(os.path.abspath(__file__))
 _ROOT      = os.path.join(_HERE, "..")
 
-BRIDGE_URL     = os.getenv("BRIDGE_URL",    "http://localhost:8011")
 REDIS_URL      = os.getenv("REDIS_URL",     "redis://localhost:6379")
 MODEL_PATH     = os.getenv("YOLOE_MODEL",   os.path.join(_ROOT, "ai", "yoloe-11m-seg.pt"))
 FRAME_INTERVAL = float(os.getenv("VISION_INTERVAL", "2.0"))   # seconds between runs
@@ -73,17 +71,31 @@ def main():
     print("[vision] Model ready.", flush=True)
 
     r = redis.from_url(REDIS_URL, decode_responses=True)
-    sess = requests.Session()
     frame_count = 0
+    last_cam_ts = None
 
     while True:
         t_start = time.time()
         try:
-            resp = sess.get(f"{BRIDGE_URL}/camera/frame", timeout=2.0)
-            if resp.status_code != 200:
-                time.sleep(0.5)
+            # Wait for a new camera frame (poll camera:ts at 100 ms)
+            deadline = t_start + FRAME_INTERVAL
+            cam_ts_raw = None
+            while time.time() < deadline:
+                ts = r.get("camera:ts")
+                if ts and ts != last_cam_ts:
+                    cam_ts_raw = ts
+                    break
+                time.sleep(0.1)
+
+            if cam_ts_raw is None:
+                continue   # no new frame within interval; loop immediately
+
+            b64 = r.get("camera:frame")
+            if not b64:
                 continue
-            jpg_bytes = resp.content
+            last_cam_ts = cam_ts_raw
+
+            jpg_bytes = base64.b64decode(b64)
 
             # Decode + resize for inference
             nparr    = np.frombuffer(jpg_bytes, np.uint8)
@@ -127,8 +139,8 @@ def main():
                 "frame_w":    INFER_W,
                 "frame_h":    INFER_H,
             }
-            r.set("vision:latest", json.dumps(payload), ex=2)
-            r.set(f"vision:thumb:{frame_id}", base64.b64encode(jpg_bytes).decode(), ex=60)
+            r.set("vision:latest", json.dumps(payload), ex=10)
+            r.set(f"vision:thumb:{frame_id}", b64, ex=60)
             r.publish("vision:events", frame_id)
 
             if frame_count % 30 == 0:
@@ -140,17 +152,9 @@ def main():
                     flush=True,
                 )
 
-        except requests.RequestException as e:
-            print(f"[vision] bridge unreachable: {e}", flush=True)
-            time.sleep(1.0)
         except Exception as e:
             print(f"[vision] error: {e}", flush=True)
             time.sleep(0.5)
-
-        elapsed = time.time() - t_start
-        wait = max(0.0, FRAME_INTERVAL - elapsed)
-        if wait > 0:
-            time.sleep(wait)
 
 
 if __name__ == "__main__":

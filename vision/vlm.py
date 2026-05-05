@@ -2,9 +2,10 @@
 """
 VLM live scene description — native macOS.
 
+Reads frames from Redis (camera:frame written by bridge).
 Runs one inference every VLM_INTERVAL seconds on the most recent camera frame.
 If inference takes longer than VLM_INTERVAL the sleep is skipped so the next
-cycle starts immediately — no queue builds up.  While inference runs, newly
+cycle starts immediately — no queue builds up.  While waiting, newly
 arrived frames are polled at 0.1 s so the freshest frame is always used.
 
 Redis keys written:
@@ -30,17 +31,6 @@ _PROMPT = (
     "Describe what you see in one short sentence. "
     "Mention objects, people, and the setting. Be concise. /no_think"
 )
-
-
-def _current_frame_id(r: redis_lib.Redis) -> str | None:
-    raw = r.get("vision:latest")
-    if not raw:
-        return None
-    return json.loads(raw).get("frame_id")
-
-
-def _fetch_frame(r: redis_lib.Redis, frame_id: str) -> str | None:
-    return r.get(f"vision:thumb:{frame_id}")
 
 
 def _resize_b64(b64_jpeg: str, size: int) -> str:
@@ -72,35 +62,35 @@ def main():
     r = redis_lib.from_url(REDIS_URL, decode_responses=True)
     print(f"[vlm] model={VLM_MODEL}  size={VLM_SIZE}  interval={VLM_INTERVAL}s", flush=True)
 
-    last_frame_id = None
+    last_cam_ts = None
 
     while True:
-        # Wait up to VLM_INTERVAL for a new frame, polling at 100 ms.
-        # This means we always pick up the freshest frame, not one that was
-        # current when inference finished.
+        # Wait up to VLM_INTERVAL for a new camera frame, polling at 100 ms.
         deadline = time.monotonic() + VLM_INTERVAL
-        frame_id = None
+        b64 = None
+        cam_ts = None
         while time.monotonic() < deadline:
-            fid = _current_frame_id(r)
-            if fid and fid != last_frame_id:
-                frame_id = fid
-                break
+            ts = r.get("camera:ts")
+            if ts and ts != last_cam_ts:
+                frame = r.get("camera:frame")
+                if frame:
+                    b64 = frame
+                    cam_ts = ts
+                    break
             time.sleep(0.1)
 
-        if frame_id is None:
+        if b64 is None:
             continue
 
-        b64 = _fetch_frame(r, frame_id)
-        if not b64:
-            continue
+        # Re-check: a newer frame may have arrived while we fetched
+        ts2 = r.get("camera:ts")
+        if ts2 and ts2 != cam_ts:
+            frame2 = r.get("camera:frame")
+            if frame2:
+                b64 = frame2
+                cam_ts = ts2
 
-        # Re-check: a newer frame may have arrived while we fetched the thumb.
-        latest = _current_frame_id(r)
-        if latest and latest != frame_id:
-            b64 = _fetch_frame(r, latest) or b64
-            frame_id = latest
-
-        last_frame_id = frame_id
+        last_cam_ts = cam_ts
 
         try:
             t0 = time.monotonic()
@@ -110,7 +100,7 @@ def main():
                 print(f"[vlm] {elapsed:.2f}s  {text[:100]}", flush=True)
                 r.set(
                     "vlm:latest",
-                    json.dumps({"text": text, "ts": time.time(), "frame_id": frame_id}),
+                    json.dumps({"text": text, "ts": time.time(), "frame_id": cam_ts}),
                     ex=30,
                 )
         except Exception as e:

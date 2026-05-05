@@ -5,11 +5,12 @@ Face recognition service — native macOS.
 Uses InsightFace (buffalo_l: SCRFD detector + ArcFace embeddings).
 Enrolled faces are read from FACES_DIR at startup — filename stem = person name.
 
-Polls vision:latest every FACEREC_INTERVAL_S seconds, runs detection +
-recognition on the frame thumbnail, publishes to Redis face:latest.
+Reads frames from Redis (camera:frame written by bridge).
+Runs detection + recognition every FACEREC_INTERVAL seconds,
+publishes to Redis face:latest.
 
 Redis keys written:
-  face:latest  JSON {faces:[{name,score,bbox},...], ts, frame_id}  TTL 10s
+  face:latest  JSON {faces:[{name,score,bbox},...], ts, frame_id, frame_w, frame_h}  TTL 10s
 """
 import base64
 import json
@@ -82,27 +83,21 @@ def main():
     print(f"[facerec] {len(db)} face(s) enrolled: {list(db)}", flush=True)
 
     r = redis_lib.from_url(REDIS_URL, decode_responses=True)
-    last_frame_id = None
+    last_cam_ts = None
 
     while True:
         try:
-            raw = r.get("vision:latest")
-            if not raw:
+            cam_ts = r.get("camera:ts")
+            if not cam_ts or cam_ts == last_cam_ts:
                 time.sleep(FACEREC_INTERVAL)
                 continue
 
-            data = json.loads(raw)
-            frame_id = data.get("frame_id")
-            if frame_id == last_frame_id:
-                time.sleep(FACEREC_INTERVAL)
-                continue
-
-            b64 = r.get(f"vision:thumb:{frame_id}")
+            b64 = r.get("camera:frame")
             if not b64:
                 time.sleep(FACEREC_INTERVAL)
                 continue
 
-            last_frame_id = frame_id
+            last_cam_ts = cam_ts
             img = _decode_frame(b64)
             h, w = img.shape[:2]
             faces = app.get(img)
@@ -119,9 +114,9 @@ def main():
             r.set(
                 "face:latest",
                 json.dumps({
-                    "faces": results,
-                    "ts": time.time(),
-                    "frame_id": frame_id,
+                    "faces":   results,
+                    "ts":      time.time(),
+                    "frame_id": cam_ts,
                     "frame_w": w,
                     "frame_h": h,
                 }),
