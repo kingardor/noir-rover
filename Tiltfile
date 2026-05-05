@@ -17,7 +17,7 @@ dc_resource('noir-redis-proxy',  labels=['infra'], resource_deps=['noir-redis'])
 # directly reachable from the robot — no socat proxies needed.
 local_resource(
     'bridge',
-    serve_cmd='ROS_MASTER_URI=http://10.42.0.1:11311 ROS_IP=10.42.0.181 REDIS_URL=redis://localhost:6380 OLLAMA_URL=http://localhost:11434 AGENT_MODEL=qwen3-vl:2b-instruct bash scripts/start_bridge.sh',
+    serve_cmd='ROS_MASTER_URI=http://10.42.0.1:11311 ROS_IP=10.42.0.181 REDIS_URL=redis://localhost:6380 OLLAMA_URL=http://localhost:11434 AGENT_MODEL=nvidia/nemotron-3-nano-30b-a3b:free OPENROUTER_API_KEY="${OPENROUTER_API_KEY}" bash scripts/start_bridge.sh',
     deps=['ros-noetic/bridge-api.py', 'ros-noetic/scoutros.py', 'scripts/start_bridge.sh'],
     labels=['native'],
     resource_deps=['noir-redis-proxy'],

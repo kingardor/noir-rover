@@ -20,9 +20,11 @@ from scoutros import ScoutROS, CMD_VEL_TOPIC, CAMERA_TOPIC
 
 # ── Redis ─────────────────────────────────────────────────────────────────────
 
-_REDIS_URL   = os.environ.get("REDIS_URL",   "redis://localhost:6380")
-_OLLAMA_URL  = os.environ.get("OLLAMA_URL",  "http://localhost:11434")
-_AGENT_MODEL = os.environ.get("AGENT_MODEL", "qwen3-vl:2b-instruct")
+_REDIS_URL        = os.environ.get("REDIS_URL",        "redis://localhost:6380")
+_OLLAMA_URL       = os.environ.get("OLLAMA_URL",       "http://localhost:11434")
+_OPENROUTER_URL   = "https://openrouter.ai/api/v1/chat/completions"
+_OPENROUTER_KEY   = os.environ.get("OPENROUTER_API_KEY", "")
+_AGENT_MODEL      = os.environ.get("AGENT_MODEL",      "nvidia/nemotron-3-nano-30b-a3b:free")
 _r: Optional[redis_lib.Redis] = None
 
 
@@ -582,50 +584,53 @@ def agent_chat(req: ChatReq):
     messages.extend(history[-10:])
     messages.append({"role": "user", "content": req.message})
 
-    def _clean(text: str) -> str:
-        import re
-        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
-        return text.strip()
+    _or_headers = {
+        "Authorization": f"Bearer {_OPENROUTER_KEY}",
+        "Content-Type":  "application/json",
+        "HTTP-Referer":  "http://localhost:8012",
+        "X-Title":       "Noir Rover",
+    }
 
     tool_log: list = []
     reply = ""
     for _ in range(4):
         try:
             resp = requests.post(
-                f"{_OLLAMA_URL}/api/chat",
+                _OPENROUTER_URL,
+                headers=_or_headers,
                 json={
-                    "model": _AGENT_MODEL,
-                    "messages": messages,
-                    "tools": _TOOLS,
-                    "stream": False,
-                    "think": False,
-                    "options": {"temperature": 0.65, "num_predict": 200},
+                    "model":       _AGENT_MODEL,
+                    "messages":    messages,
+                    "tools":       _TOOLS,
+                    "tool_choice": "auto",
+                    "temperature": 0.65,
+                    "stream":      False,
                 },
                 timeout=60,
             )
             resp.raise_for_status()
             data = resp.json()
         except Exception as exc:
-            reply = f"[noir] server unreachable: {exc}"
+            reply = f"[noir] unreachable: {exc}"
             break
 
-        msg   = data.get("message", {})
+        msg   = (data.get("choices") or [{}])[0].get("message", {})
         calls = msg.get("tool_calls") or []
 
         if not calls:
-            reply = _clean(msg.get("content") or "")
+            reply = (msg.get("content") or "").strip()
             messages.append({"role": "assistant", "content": reply})
             break
 
-        # Don't store model preamble/thinking from tool-call turns — it snowballs in history
         messages.append({
-            "role": "assistant",
-            "content": "",
+            "role":       "assistant",
+            "content":    msg.get("content") or "",
             "tool_calls": calls,
         })
         for c in calls:
-            fn   = (c.get("function") or {}).get("name", "")
-            args = (c.get("function") or {}).get("arguments") or {}
+            fn      = (c.get("function") or {}).get("name", "")
+            tc_id   = c.get("id", "")
+            args    = (c.get("function") or {}).get("arguments") or {}
             if isinstance(args, str):
                 try:
                     args = json.loads(args)
@@ -636,10 +641,14 @@ def agent_chat(req: ChatReq):
             except Exception as exc:
                 result = {"error": str(exc)}
             tool_log.append({"name": fn, "args": args, "result": result})
-            messages.append({"role": "tool", "content": json.dumps(result)[:1500]})
+            messages.append({
+                "role":         "tool",
+                "tool_call_id": tc_id,
+                "content":      json.dumps(result)[:1500],
+            })
     else:
         if not reply:
-            reply = "[noir] (couldn't finish — try again)"
+            reply = "[noir] hit iteration limit — try again"
 
     history.append({"role": "user",      "content": req.message})
     history.append({"role": "assistant", "content": reply or "…"})
