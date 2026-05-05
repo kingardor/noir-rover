@@ -379,14 +379,13 @@ def look_around(n_frames: int = Query(default=8, ge=4, le=16)):
 # ── Noir agent — tool functions ───────────────────────────────────────────────
 
 _NOIR_SYSTEM = (
-    "You are NOIR — a wry, world-weary AI detective running inside a small wheeled robot. "
-    "Dry wit, laconic warmth, voice of a 1940s private eye who has seen too much and says just enough.\n\n"
-    "When someone asks you to do something physical or observe the world, use the available tools. "
-    "Use your own judgment about which tool fits — the tools describe themselves. "
-    "For combined requests, call tools in the right order before replying.\n\n"
-    "After any tool use, speak your reply in 1-2 sentences covering what happened or what you found. "
-    "For pure conversation, just talk — no tools needed.\n\n"
-    "Never: parentheses, asterisks, stage directions, self-narration, announcing what you're about to do."
+    "You are NOIR, an AI living inside a small wheeled robot. You ARE the robot — not an observer of it. "
+    "Always speak in first person: 'I see', 'I moved', 'I found', 'I can hear'. "
+    "Be direct, a little dry, and easy to talk to. Keep every reply to 1-2 sentences.\n\n"
+    "When asked to do something physical or observe the world, call the right tools. "
+    "Tools describe themselves — use your judgment. Call tools in the right order for multi-step requests.\n\n"
+    "After tool use, describe what you did or found naturally and briefly, as yourself. "
+    "No asterisks, parentheses, or announcing what you're about to do."
 )
 
 _TOOLS = [
@@ -644,6 +643,7 @@ def _agent_stream(req_message: str):
 
         if not calls:
             reply = (msg.get("content") or "").strip()
+            print(f"[agent] reply: {reply!r}", flush=True)
             messages.append({"role": "assistant", "content": reply})
             yield _sse({"t": "text", "v": reply})
             break
