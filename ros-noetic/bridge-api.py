@@ -397,17 +397,24 @@ _TOOLS = [
     {"type": "function", "function": {
         "name": "move",
         "description": (
-            "Physically moves or rotates the robot. "
+            "Drives the robot in a straight line. "
             "forward_m: travel forward (positive) or backward (negative), max ±0.6 m. "
             "strafe_m: slide right (positive) or left (negative), max ±0.4 m. "
-            "rotate_deg: turn clockwise/right (positive) or counter-clockwise/left (negative), max ±90°. "
-            "Set only the parameters needed; omit or leave others at 0."
+            "Use the separate rotate tool for turning — do not combine move and rotate in the same request."
         ),
         "parameters": {"type": "object", "properties": {
-            "forward_m":  {"type": "number"},
-            "strafe_m":   {"type": "number"},
-            "rotate_deg": {"type": "number"},
+            "forward_m": {"type": "number"},
+            "strafe_m":  {"type": "number"},
         }}}},
+    {"type": "function", "function": {
+        "name": "rotate",
+        "description": (
+            "Turns the robot in place. "
+            "rotate_deg: degrees to turn — positive = clockwise/right, negative = counter-clockwise/left. Max ±180°."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "rotate_deg": {"type": "number"},
+        }, "required": ["rotate_deg"]}}},
     {"type": "function", "function": {
         "name": "look_around",
         "description": "Rotates the robot slowly through a full 360° while capturing frames, giving a complete panoramic survey of the surroundings.",
@@ -435,7 +442,12 @@ _TOOLS = [
         }, "required": ["on"]}}},
     {"type": "function", "function": {
         "name": "capture_and_describe",
-        "description": "Captures a fresh camera frame right now and answers a specific visual question about it. Use this when you need an up-to-date view, especially after moving.",
+        "description": (
+            "Captures a live camera frame and answers any visual question about it using the robot's vision intelligence. "
+            "This can identify specific objects ('is there a bottle?'), colors, positions, text, and scene details that "
+            "list_objects cannot — list_objects only returns labeled bounding boxes from a fixed detector. "
+            "Always use this after moving when you need to inspect something specific."
+        ),
         "parameters": {"type": "object", "properties": {
             "question": {"type": "string", "description": "The visual question to answer about the current frame"},
         }, "required": ["question"]}}},
@@ -448,17 +460,28 @@ def _tool_stop() -> dict:
     return {"ok": True}
 
 
-def _tool_move(forward_m: float = 0.0, strafe_m: float = 0.0, rotate_deg: float = 0.0) -> dict:
-    forward_m  = max(-0.6, min(0.6,  float(forward_m)))
-    strafe_m   = max(-0.4, min(0.4,  float(strafe_m)))
-    rotate_deg = max(-90.0, min(90.0, float(rotate_deg)))
-    out: dict = {"forward_m": forward_m, "strafe_m": strafe_m, "rotate_deg": rotate_deg}
+def _tool_move(forward_m: float = 0.0, strafe_m: float = 0.0) -> dict:
+    forward_m = max(-0.6, min(0.6, float(forward_m)))
+    strafe_m  = max(-0.4, min(0.4, float(strafe_m)))
+    out: dict = {"forward_m": forward_m, "strafe_m": strafe_m}
     if abs(forward_m) > 1e-3 or abs(strafe_m) > 1e-3:
         # Axis mapping: algo_move(x_dist=strafe, y_dist=forward)
         out["move"] = ros.algo_move(strafe_m, forward_m, 0.3)
-    if abs(rotate_deg) > 1e-3:
-        out["rotate"] = ros.algo_roll(math.radians(rotate_deg), 1.0, 8, 0.05)
     return out
+
+
+def _tool_rotate(rotate_deg: float) -> dict:
+    rotate_deg = max(-180.0, min(180.0, float(rotate_deg)))
+    if abs(rotate_deg) < 1e-3:
+        return {"rotate_deg": 0, "ok": True}
+    # Use Twist-based timing — same mechanism as the controller (algo_roll is unreliable).
+    rot_speed = 3.0  # rad/s
+    duration_s = abs(math.radians(rotate_deg)) / rot_speed
+    direction = math.copysign(1.0, rotate_deg)
+    _set_vel(0.0, 0.0, direction * rot_speed, duration_s)
+    ros.publish_twist(0.0, 0.0, direction * rot_speed)
+    time.sleep(duration_s + 0.15)  # wait for hold to expire naturally
+    return {"rotate_deg": rotate_deg, "ok": True}
 
 
 def _tool_look_around(n: int = 8) -> dict:
@@ -538,13 +561,14 @@ def _tool_capture_and_describe(question: str) -> dict:
 
 
 _TOOL_DISPATCH = {
-    "stop":                _tool_stop,
-    "move":                _tool_move,
-    "look_around":         _tool_look_around,
-    "describe_scene":      _tool_describe_scene,
-    "list_objects":        _tool_list_objects,
-    "who_is_here":         _tool_who_is_here,
-    "set_follow_mode":     _tool_set_follow_mode,
+    "stop":                 _tool_stop,
+    "move":                 _tool_move,
+    "rotate":               _tool_rotate,
+    "look_around":          _tool_look_around,
+    "describe_scene":       _tool_describe_scene,
+    "list_objects":         _tool_list_objects,
+    "who_is_here":          _tool_who_is_here,
+    "set_follow_mode":      _tool_set_follow_mode,
     "capture_and_describe": _tool_capture_and_describe,
 }
 
@@ -553,12 +577,11 @@ class ChatReq(BaseModel):
     message: str
 
 
-@app.post("/agent/chat")
-def agent_chat(req: ChatReq):
+def _agent_stream(req_message: str):
+    """Sync generator yielding SSE events for the agent tool loop."""
     r = _redis()
     history: list = json.loads(r.get("agent:history") or "[]")
 
-    # Build perception context snapshot
     ctx: list = []
     try:
         v = json.loads(r.get("vlm:latest") or "{}")
@@ -574,30 +597,31 @@ def agent_chat(req: ChatReq):
             ctx.append(f"people: {', '.join(names)}")
     except Exception:
         pass
-    ctx_block = "\n".join(ctx) if ctx else None
 
     sys_content = _NOIR_SYSTEM
-    if ctx_block:
-        sys_content += "\n\nSENSOR FEED (background — reference only if relevant):\n" + ctx_block
+    if ctx:
+        sys_content += "\n\nSENSOR FEED (background — reference only if relevant):\n" + "\n".join(ctx)
 
     messages: list = [{"role": "system", "content": sys_content}]
     messages.extend(history[-10:])
-    messages.append({"role": "user", "content": req.message})
+    messages.append({"role": "user", "content": req_message})
 
-    _or_headers = {
+    or_headers = {
         "Authorization": f"Bearer {_OPENROUTER_KEY}",
         "Content-Type":  "application/json",
         "HTTP-Referer":  "http://localhost:8012",
         "X-Title":       "Noir Rover",
     }
 
-    tool_log: list = []
+    def _sse(payload: dict) -> str:
+        return f"data: {json.dumps(payload)}\n\n"
+
     reply = ""
     for _ in range(4):
         try:
             resp = requests.post(
                 _OPENROUTER_URL,
-                headers=_or_headers,
+                headers=or_headers,
                 json={
                     "model":       _AGENT_MODEL,
                     "messages":    messages,
@@ -612,6 +636,7 @@ def agent_chat(req: ChatReq):
             data = resp.json()
         except Exception as exc:
             reply = f"[noir] unreachable: {exc}"
+            yield _sse({"t": "text", "v": reply})
             break
 
         msg   = (data.get("choices") or [{}])[0].get("message", {})
@@ -620,6 +645,7 @@ def agent_chat(req: ChatReq):
         if not calls:
             reply = (msg.get("content") or "").strip()
             messages.append({"role": "assistant", "content": reply})
+            yield _sse({"t": "text", "v": reply})
             break
 
         messages.append({
@@ -628,19 +654,20 @@ def agent_chat(req: ChatReq):
             "tool_calls": calls,
         })
         for c in calls:
-            fn      = (c.get("function") or {}).get("name", "")
-            tc_id   = c.get("id", "")
-            args    = (c.get("function") or {}).get("arguments") or {}
+            fn    = (c.get("function") or {}).get("name", "")
+            tc_id = c.get("id", "")
+            args  = (c.get("function") or {}).get("arguments") or {}
             if isinstance(args, str):
                 try:
                     args = json.loads(args)
                 except Exception:
                     args = {}
+            yield _sse({"t": "tool_start", "name": fn, "args": args})
             try:
                 result = _TOOL_DISPATCH[fn](**args) if fn in _TOOL_DISPATCH else {"error": f"unknown_tool:{fn}"}
             except Exception as exc:
                 result = {"error": str(exc)}
-            tool_log.append({"name": fn, "args": args, "result": result})
+            yield _sse({"t": "tool_result", "name": fn, "result": result})
             messages.append({
                 "role":         "tool",
                 "tool_call_id": tc_id,
@@ -649,11 +676,21 @@ def agent_chat(req: ChatReq):
     else:
         if not reply:
             reply = "[noir] hit iteration limit — try again"
+            yield _sse({"t": "text", "v": reply})
 
-    history.append({"role": "user",      "content": req.message})
+    history.append({"role": "user",      "content": req_message})
     history.append({"role": "assistant", "content": reply or "…"})
     r.set("agent:history", json.dumps(history[-20:]), ex=1800)
-    return {"reply": reply, "tool_calls": tool_log}
+    yield _sse({"t": "done"})
+
+
+@app.post("/agent/chat")
+def agent_chat(req: ChatReq):
+    return StreamingResponse(
+        _agent_stream(req.message),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.post("/agent/reset")
