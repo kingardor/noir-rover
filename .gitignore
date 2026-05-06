@@ -1,5 +1,6 @@
 # Project-specific
 .claude/
+.worktrees/
 logs/
 out/
 dataflows/
