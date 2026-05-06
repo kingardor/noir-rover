@@ -1301,6 +1301,7 @@ let _audioReady      = false;
 let _mediaRecorder   = null;
 let _audioChunks     = [];
 let _micStream       = null;
+let _audioCtx        = null; // unlocked inside user gesture on first mousedown
 
 // Disable mic and poll until audio sidecar models are warmed up
 micBtn.disabled = true;
@@ -1339,6 +1340,10 @@ function _setVoiceState(state) {
 
 async function _startRecording() {
   if (_voiceState !== 'idle' || _noirBusy) return;
+  // Unlock AudioContext while we're still inside the user gesture.
+  // Once resumed here, it stays unlocked for the entire voice pipeline.
+  if (!_audioCtx) _audioCtx = new AudioContext();
+  if (_audioCtx.state === 'suspended') _audioCtx.resume();
   try {
     _micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
   } catch (err) {
@@ -1428,13 +1433,14 @@ async function _runVoicePipeline() {
         signal: AbortSignal.timeout(90000),
       });
       if (ttsRes.ok) {
-        const audioBlob = await ttsRes.blob();
-        const audioUrl  = URL.createObjectURL(audioBlob);
-        const audio     = new Audio(audioUrl);
-        audio.onended = () => { URL.revokeObjectURL(audioUrl); _setVoiceState('idle'); };
-        audio.onerror = () => { URL.revokeObjectURL(audioUrl); _setVoiceState('idle'); };
-        await audio.play();
-        return; // state transitions via audio events
+        const arrayBuf = await ttsRes.arrayBuffer();
+        const decoded  = await _audioCtx.decodeAudioData(arrayBuf);
+        const source   = _audioCtx.createBufferSource();
+        source.buffer  = decoded;
+        source.connect(_audioCtx.destination);
+        source.onended = () => _setVoiceState('idle');
+        source.start();
+        return; // state transitions via source.onended
       }
     } catch { /* TTS failed — still show text, just don't play */ }
   }
