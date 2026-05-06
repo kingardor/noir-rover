@@ -77,7 +77,7 @@ local_resource(
 # One-shot gate: waits until both STT and TTS models have loaded inside the sidecar
 local_resource(
     'audio-ready',
-    cmd='bash -c "until curl -sf http://localhost:8014/audio/health | python3 -c \"import sys,json; d=json.load(sys.stdin); exit(0 if d[\'stt_ready\'] and d[\'tts_ready\'] else 1)\" 2>/dev/null; do sleep 3; done"',
+    cmd='bash scripts/wait_audio_ready.sh',
     resource_deps=['audio'],
     labels=['ready-check'],
 )
