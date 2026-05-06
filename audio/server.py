@@ -38,7 +38,14 @@ def _load_tts():
     global _tts_model
     print(f"[audio] loading TTS {TTS_MODEL}…", flush=True)
     from mlx_audio.tts.utils import load_model
-    _tts_model = load_model(TTS_MODEL)
+    model = load_model(TTS_MODEL)
+    # Run a silent warmup to trigger pipeline init and spacy/espeak downloads
+    # before the health check reports ready. This avoids a 30-40s delay on
+    # the first real TTS request.
+    print("[audio] warming up TTS pipeline…", flush=True)
+    for _ in model.generate(text=".", voice=TTS_VOICE, speed=1.0, lang_code="a"):
+        pass
+    _tts_model = model
     print("[audio] TTS ready", flush=True)
 
 

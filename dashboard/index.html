@@ -1425,7 +1425,7 @@ async function _runVoicePipeline() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: replyText }),
-        signal: AbortSignal.timeout(30000),
+        signal: AbortSignal.timeout(90000),
       });
       if (ttsRes.ok) {
         const audioBlob = await ttsRes.blob();
