@@ -23,7 +23,7 @@ TTS_MODEL = os.getenv("TTS_MODEL", "mlx-community/Kokoro-82M-4bit")
 TTS_VOICE = os.getenv("TTS_VOICE", "af_heart")
 
 _stt_model = None
-_tts_ready = False
+_tts_model = None
 
 
 def _load_stt():
@@ -35,11 +35,10 @@ def _load_stt():
 
 
 def _load_tts():
-    global _tts_ready
+    global _tts_model
     print(f"[audio] loading TTS {TTS_MODEL}…", flush=True)
-    # Import to trigger model download / cache warm; actual generation is lazy
-    import mlx_audio.tts  # noqa: F401
-    _tts_ready = True
+    from mlx_audio.tts.utils import load_model
+    _tts_model = load_model(TTS_MODEL)
     print("[audio] TTS ready", flush=True)
 
 
@@ -56,7 +55,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 
 @app.get("/audio/health")
 def health():
-    return {"stt_ready": _stt_model is not None, "tts_ready": _tts_ready}
+    return {"stt_ready": _stt_model is not None, "tts_ready": _tts_model is not None}
 
 
 @app.post("/audio/stt")
@@ -89,27 +88,34 @@ class TTSRequest(BaseModel):
 
 
 @app.post("/audio/tts")
-def tts(req: TTSRequest):
-    if not _tts_ready:
+async def tts(req: TTSRequest):
+    if _tts_model is None:
         raise HTTPException(503, "TTS model not ready")
 
-    from mlx_audio.tts.generate import generate
     import soundfile as sf
 
     print(f"[audio/tts] {req.text[:60]!r}", flush=True)
     t0 = time.monotonic()
 
-    # generate() returns a numpy array of float32 samples at 24000 Hz
-    audio: np.ndarray = generate(
+    # model.generate() yields GenerationResult with .audio (1-D float array) and .sample_rate
+    chunks = []
+    sample_rate = 24000
+    for result in _tts_model.generate(
         text=req.text,
-        model_id=TTS_MODEL,
         voice=req.voice,
         speed=1.0,
         lang_code="a",
-    )
+    ):
+        chunks.append(np.array(result.audio))
+        sample_rate = result.sample_rate
+
+    if not chunks:
+        raise HTTPException(500, "TTS produced no audio")
+
+    audio = np.concatenate(chunks) if len(chunks) > 1 else chunks[0]
 
     buf = io.BytesIO()
-    sf.write(buf, audio, samplerate=24000, format="WAV", subtype="PCM_16")
+    sf.write(buf, audio, samplerate=sample_rate, format="WAV", subtype="PCM_16")
     wav_bytes = buf.getvalue()
 
     elapsed_ms = int((time.monotonic() - t0) * 1000)

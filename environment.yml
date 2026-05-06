@@ -28,5 +28,6 @@ dependencies:
     - vllm-mlx>=0.2.9
     - parakeet-mlx
     - mlx-audio
+    - misaki[en]
     - python-multipart
     - soundfile
