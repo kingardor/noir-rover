@@ -13,19 +13,21 @@ dc_resource('noir-redis-proxy',  labels=['infra'], resource_deps=['noir-redis'])
 
 # ── Native macOS services ─────────────────────────────────────────────────────
 
-# vllm-mlx serves Qwen3-VL-2B locally on :8000 — all LLM inference goes here.
-# To switch back to OpenRouter: set AGENT_PROVIDER=openrouter in the bridge serve_cmd.
+# mlx-vlm server — Qwen3-VL-2B on :8000 (text + vision + tool calling).
+# vllm-mlx was tried but crashes on Qwen3-VL (GPU stream thread issue in worker pool).
+# mlx_vlm.server runs inference in the main thread and works correctly.
+# To switch to OpenRouter instead: set AGENT_PROVIDER=openrouter in the bridge serve_cmd.
 local_resource(
-    'vllm-mlx',
-    serve_cmd='/opt/homebrew/opt/micromamba/bin/micromamba run -n noir_env vllm-mlx serve mlx-community/Qwen3-VL-2B-Instruct-4bit --port 8000 --tool-call-parser qwen',
+    'vlm-server',
+    serve_cmd='/opt/homebrew/opt/micromamba/bin/micromamba run -n noir_env python -m mlx_vlm.server --model mlx-community/Qwen3-VL-2B-Instruct-4bit --port 8000',
     labels=['native'],
     resource_deps=['noir-redis-proxy'],
 )
 
 local_resource(
-    'vllm-mlx-ready',
-    cmd='bash -c "until curl -sf http://localhost:8000/v1/models > /dev/null 2>&1; do sleep 2; done; curl -sf http://localhost:8000/v1/models -o /dev/null"',
-    resource_deps=['vllm-mlx'],
+    'vlm-server-ready',
+    cmd='bash -c "until curl -sf http://localhost:8000/v1/models > /dev/null 2>&1; do sleep 2; done"',
+    resource_deps=['vlm-server'],
     labels=['ready-check'],
 )
 
@@ -36,7 +38,7 @@ local_resource(
     serve_cmd='set -a; [ -f .env ] && . .env; set +a; ROS_MASTER_URI=http://10.42.0.1:11311 ROS_IP=10.42.0.181 REDIS_URL=redis://localhost:6380 AGENT_PROVIDER=mlx MLX_VLM_URL=http://localhost:8000 AGENT_MODEL=mlx-community/Qwen3-VL-2B-Instruct-4bit bash scripts/start_bridge.sh',
     deps=['ros-noetic/bridge-api.py', 'ros-noetic/scoutros.py', 'scripts/start_bridge.sh'],
     labels=['native'],
-    resource_deps=['noir-redis-proxy', 'vllm-mlx-ready'],
+    resource_deps=['noir-redis-proxy', 'vlm-server-ready'],
 )
 
 # One-shot readiness gate — blocks native resources until bridge responds
@@ -60,7 +62,7 @@ local_resource(
     serve_cmd='REDIS_URL=redis://localhost:6380 MLX_VLM_URL=http://localhost:8000 VLM_MODEL=mlx-community/Qwen3-VL-2B-Instruct-4bit VLM_INTERVAL=5.0 /opt/homebrew/opt/micromamba/bin/micromamba run -n noir_env python -u vision/vlm.py',
     deps=['vision/vlm.py'],
     labels=['native'],
-    resource_deps=['bridge-ready', 'vllm-mlx-ready'],
+    resource_deps=['bridge-ready', 'vlm-server-ready'],
 )
 
 # Audio sidecar — Parakeet STT + Kokoro TTS on :8014
@@ -70,6 +72,14 @@ local_resource(
     deps=['audio/server.py'],
     labels=['native'],
     resource_deps=['bridge-ready'],
+)
+
+# One-shot gate: waits until both STT and TTS models have loaded inside the sidecar
+local_resource(
+    'audio-ready',
+    cmd='bash -c "until curl -sf http://localhost:8014/audio/health | python3 -c \"import sys,json; d=json.load(sys.stdin); exit(0 if d[\'stt_ready\'] and d[\'tts_ready\'] else 1)\" 2>/dev/null; do sleep 3; done"',
+    resource_deps=['audio'],
+    labels=['ready-check'],
 )
 
 local_resource(
@@ -95,6 +105,6 @@ local_resource(
     serve_cmd='bash -c "lsof -ti:8013 | xargs kill -9 2>/dev/null || true; python3 -m http.server 8013 --directory dashboard"',
     deps=['dashboard/'],
     labels=['native'],
-    resource_deps=['bridge-ready'],
+    resource_deps=['bridge-ready', 'audio-ready'],
     links=['http://localhost:8013'],
 )

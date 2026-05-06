@@ -21,7 +21,6 @@ from scoutros import ScoutROS, CMD_VEL_TOPIC, CAMERA_TOPIC
 # ── Redis ─────────────────────────────────────────────────────────────────────
 
 _REDIS_URL        = os.environ.get("REDIS_URL",        "redis://localhost:6380")
-_OLLAMA_URL       = os.environ.get("OLLAMA_URL",       "http://localhost:11434")  # kept for reference
 _OPENROUTER_URL   = "https://openrouter.ai/api/v1/chat/completions"
 _OPENROUTER_KEY   = os.environ.get("OPENROUTER_API_KEY", "")
 # Provider: "mlx" (local vllm-mlx, default) or "openrouter" (cloud fallback)

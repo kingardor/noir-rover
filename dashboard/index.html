@@ -1295,11 +1295,36 @@ let _noirBusy   = false;
 // ── Hold-to-speak voice pipeline ─────────────────────────────────────────────
 const micBtn         = document.getElementById('noir-mic');
 const voiceStatus    = document.getElementById('noir-voice-status');
-// states: idle | recording | transcribing | thinking | speaking
-let _voiceState      = 'idle';
+// states: idle | recording | transcribing | thinking | speaking | loading
+let _voiceState      = 'loading';
+let _audioReady      = false;
 let _mediaRecorder   = null;
 let _audioChunks     = [];
 let _micStream       = null;
+
+// Disable mic and poll until audio sidecar models are warmed up
+micBtn.disabled = true;
+micBtn.title = 'Audio models loading…';
+voiceStatus.textContent = 'audio loading…';
+(async function _waitForAudio() {
+  while (true) {
+    try {
+      const r = await fetch(`${AUDIO_API}/audio/health`, { signal: AbortSignal.timeout(3000) });
+      if (r.ok) {
+        const d = await r.json();
+        if (d.stt_ready && d.tts_ready) {
+          _audioReady = true;
+          _voiceState = 'idle';
+          micBtn.disabled = false;
+          micBtn.title = 'Hold to speak';
+          voiceStatus.textContent = '';
+          return;
+        }
+      }
+    } catch { /* sidecar not up yet */ }
+    await new Promise(r => setTimeout(r, 3000));
+  }
+})();
 
 function _setVoiceState(state) {
   _voiceState = state;
