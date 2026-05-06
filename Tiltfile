@@ -68,7 +68,7 @@ local_resource(
 # Audio sidecar — Parakeet STT + Kokoro TTS on :8014
 local_resource(
     'audio',
-    serve_cmd='REDIS_URL=redis://localhost:6380 /opt/homebrew/opt/micromamba/bin/micromamba run -n noir_env python -u -m audio.server',
+    serve_cmd='bash -c "lsof -ti:8014 | xargs kill -9 2>/dev/null || true; REDIS_URL=redis://localhost:6380 /opt/homebrew/opt/micromamba/bin/micromamba run -n noir_env python -u -m audio.server"',
     deps=['audio/server.py'],
     labels=['native'],
     resource_deps=['bridge-ready'],
