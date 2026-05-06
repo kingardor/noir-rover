@@ -21,10 +21,14 @@ from scoutros import ScoutROS, CMD_VEL_TOPIC, CAMERA_TOPIC
 # ── Redis ─────────────────────────────────────────────────────────────────────
 
 _REDIS_URL        = os.environ.get("REDIS_URL",        "redis://localhost:6380")
-_OLLAMA_URL       = os.environ.get("OLLAMA_URL",       "http://localhost:11434")
+_OLLAMA_URL       = os.environ.get("OLLAMA_URL",       "http://localhost:11434")  # kept for reference
 _OPENROUTER_URL   = "https://openrouter.ai/api/v1/chat/completions"
 _OPENROUTER_KEY   = os.environ.get("OPENROUTER_API_KEY", "")
-_AGENT_MODEL      = os.environ.get("AGENT_MODEL",      "nvidia/nemotron-nano-12b-v2-vl:free")
+# Provider: "mlx" (local vllm-mlx, default) or "openrouter" (cloud fallback)
+_AGENT_PROVIDER        = os.environ.get("AGENT_PROVIDER",  "mlx")
+_MLX_VLM_URL           = os.environ.get("MLX_VLM_URL",    "http://localhost:8000")
+_AGENT_MODEL           = os.environ.get("AGENT_MODEL",     "mlx-community/Qwen3-VL-2B-Instruct-4bit")
+_OPENROUTER_AGENT_MODEL = os.environ.get("OPENROUTER_MODEL", "nvidia/nemotron-nano-12b-v2-vl:free")
 _r: Optional[redis_lib.Redis] = None
 
 
@@ -376,6 +380,29 @@ def look_around(n_frames: int = Query(default=8, ge=4, le=16)):
     return {"frames": results, "total_frames": len(results)}
 
 
+# ── Noir agent — provider routing ─────────────────────────────────────────────
+
+def _provider_config() -> tuple[str, str, dict]:
+    """Return (url, model, headers) for the active agent provider."""
+    if _AGENT_PROVIDER == "openrouter":
+        return (
+            _OPENROUTER_URL,
+            _OPENROUTER_AGENT_MODEL,
+            {
+                "Authorization": f"Bearer {_OPENROUTER_KEY}",
+                "Content-Type":  "application/json",
+                "HTTP-Referer":  "http://localhost:8012",
+                "X-Title":       "Noir Rover",
+            },
+        )
+    # mlx — local vllm-mlx server (OpenAI-compat)
+    return (
+        f"{_MLX_VLM_URL}/v1/chat/completions",
+        _AGENT_MODEL,
+        {"Content-Type": "application/json"},
+    )
+
+
 # ── Noir agent — tool functions ───────────────────────────────────────────────
 
 _NOIR_SYSTEM = (
@@ -542,20 +569,29 @@ def _tool_capture_and_describe(question: str) -> dict:
     if not jpg:
         return {"text": "", "error": "no_frame"}
     b64 = base64.b64encode(jpg).decode()
+    data_url = f"data:image/jpeg;base64,{b64}"
+    # Vision-only call — no tools, just image + question
+    url, model, headers = _provider_config()
     try:
         resp = requests.post(
-            f"{_OLLAMA_URL}/api/generate",
+            url,
+            headers=headers,
             json={
-                "model": _AGENT_MODEL,
-                "prompt": question + " /no_think",
-                "images": [b64],
+                "model": model,
+                "messages": [{"role": "user", "content": [
+                    {"type": "image_url", "image_url": {"url": data_url}},
+                    {"type": "text", "text": question + " /no_think"},
+                ]}],
+                "temperature": 0.0,
+                "max_tokens": 80,
                 "stream": False,
-                "options": {"temperature": 0.0, "num_predict": 80},
             },
             timeout=30,
         )
         resp.raise_for_status()
-        return {"text": resp.json().get("response", "").strip()}
+        data = resp.json()
+        text = (data.get("choices") or [{}])[0].get("message", {}).get("content", "").strip()
+        return {"text": text}
     except Exception as e:
         return {"text": "", "error": str(e)}
 
@@ -606,22 +642,18 @@ def agent_chat(req: ChatReq):
     messages.extend(history[-10:])
     messages.append({"role": "user", "content": req.message})
 
-    or_headers = {
-        "Authorization": f"Bearer {_OPENROUTER_KEY}",
-        "Content-Type":  "application/json",
-        "HTTP-Referer":  "http://localhost:8012",
-        "X-Title":       "Noir Rover",
-    }
+    chat_url, chat_model, chat_headers = _provider_config()
+    print(f"[agent] provider={_AGENT_PROVIDER} model={chat_model}", flush=True)
 
     tool_log: list = []
     reply = ""
     for _ in range(4):
         try:
             resp = requests.post(
-                _OPENROUTER_URL,
-                headers=or_headers,
+                chat_url,
+                headers=chat_headers,
                 json={
-                    "model":       _AGENT_MODEL,
+                    "model":       chat_model,
                     "messages":    messages,
                     "tools":       _TOOLS,
                     "tool_choice": "auto",

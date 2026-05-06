@@ -13,14 +13,30 @@ dc_resource('noir-redis-proxy',  labels=['infra'], resource_deps=['noir-redis'])
 
 # ── Native macOS services ─────────────────────────────────────────────────────
 
+# vllm-mlx serves Qwen3-VL-2B locally on :8000 — all LLM inference goes here.
+# To switch back to OpenRouter: set AGENT_PROVIDER=openrouter in the bridge serve_cmd.
+local_resource(
+    'vllm-mlx',
+    serve_cmd='/opt/homebrew/opt/micromamba/bin/micromamba run -n noir_env vllm-mlx serve mlx-community/Qwen3-VL-2B-Instruct-4bit --port 8000 --tool-call-parser qwen',
+    labels=['native'],
+    resource_deps=['noir-redis-proxy'],
+)
+
+local_resource(
+    'vllm-mlx-ready',
+    cmd='bash -c "until curl -sf http://localhost:8000/v1/models > /dev/null 2>&1; do sleep 2; done; curl -sf http://localhost:8000/v1/models -o /dev/null"',
+    resource_deps=['vllm-mlx'],
+    labels=['ready-check'],
+)
+
 # Bridge runs natively so ROS XMLRPC/TCPROS bind on Mac's real IP (10.42.0.181),
 # directly reachable from the robot — no socat proxies needed.
 local_resource(
     'bridge',
-    serve_cmd='set -a; [ -f .env ] && . .env; set +a; ROS_MASTER_URI=http://10.42.0.1:11311 ROS_IP=10.42.0.181 REDIS_URL=redis://localhost:6380 OLLAMA_URL=http://localhost:11434 AGENT_MODEL=nvidia/nemotron-nano-12b-v2-vl:free bash scripts/start_bridge.sh',
+    serve_cmd='set -a; [ -f .env ] && . .env; set +a; ROS_MASTER_URI=http://10.42.0.1:11311 ROS_IP=10.42.0.181 REDIS_URL=redis://localhost:6380 AGENT_PROVIDER=mlx MLX_VLM_URL=http://localhost:8000 AGENT_MODEL=mlx-community/Qwen3-VL-2B-Instruct-4bit bash scripts/start_bridge.sh',
     deps=['ros-noetic/bridge-api.py', 'ros-noetic/scoutros.py', 'scripts/start_bridge.sh'],
     labels=['native'],
-    resource_deps=['noir-redis-proxy'],
+    resource_deps=['noir-redis-proxy', 'vllm-mlx-ready'],
 )
 
 # One-shot readiness gate — blocks native resources until bridge responds
@@ -28,14 +44,6 @@ local_resource(
     'bridge-ready',
     cmd='bash -c "until curl -sf http://localhost:8012/status > /dev/null 2>&1; do sleep 1; done"',
     resource_deps=['bridge'],
-    labels=['ready-check'],
-)
-
-# Ollama is managed by the macOS menu-bar app — do not call 'ollama serve'.
-# This gate simply waits until the already-running Ollama is reachable.
-local_resource(
-    'ollama-ready',
-    cmd='bash -c "until curl -sf http://localhost:11434/api/version > /dev/null 2>&1; do sleep 1; done"',
     labels=['ready-check'],
 )
 
@@ -49,10 +57,19 @@ local_resource(
 
 local_resource(
     'vlm',
-    serve_cmd='REDIS_URL=redis://localhost:6380 OLLAMA_URL=http://localhost:11434 /opt/homebrew/opt/micromamba/bin/micromamba run -n noir_env python -u vision/vlm.py',
+    serve_cmd='REDIS_URL=redis://localhost:6380 MLX_VLM_URL=http://localhost:8000 VLM_MODEL=mlx-community/Qwen3-VL-2B-Instruct-4bit VLM_INTERVAL=5.0 /opt/homebrew/opt/micromamba/bin/micromamba run -n noir_env python -u vision/vlm.py',
     deps=['vision/vlm.py'],
     labels=['native'],
-    resource_deps=['bridge-ready', 'ollama-ready'],
+    resource_deps=['bridge-ready', 'vllm-mlx-ready'],
+)
+
+# Audio sidecar — Parakeet STT + Kokoro TTS on :8014
+local_resource(
+    'audio',
+    serve_cmd='REDIS_URL=redis://localhost:6380 /opt/homebrew/opt/micromamba/bin/micromamba run -n noir_env python -u -m audio.server',
+    deps=['audio/server.py'],
+    labels=['native'],
+    resource_deps=['bridge-ready'],
 )
 
 local_resource(

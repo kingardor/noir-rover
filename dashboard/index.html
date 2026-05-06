@@ -521,6 +521,38 @@
     }
     .noir-send:hover { opacity: .85; }
     .noir-send:active { transform: scale(.97); }
+    .noir-mic {
+      background: none;
+      border: none;
+      color: var(--fg-dim);
+      font-size: 16px;
+      width: 36px;
+      cursor: pointer;
+      transition: color 150ms;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .noir-mic:hover { color: var(--fg); }
+    .noir-mic.recording {
+      color: var(--red);
+      animation: mic-pulse 0.8s ease-in-out infinite alternate;
+    }
+    @keyframes mic-pulse {
+      from { opacity: 1; }
+      to   { opacity: 0.4; }
+    }
+    .noir-voice-status {
+      font-family: var(--font-bd);
+      font-size: 9px;
+      color: var(--fg-dim);
+      padding: 0 8px;
+      white-space: nowrap;
+      display: flex;
+      align-items: center;
+      flex-shrink: 0;
+    }
     .noir-reset {
       background: none;
       border: 1px solid var(--border-hi);
@@ -713,6 +745,8 @@
       </div>
       <div class="noir-log" id="noir-log"></div>
       <div class="noir-input-row">
+        <button class="noir-mic" id="noir-mic" title="Hold to speak">🎤</button>
+        <span class="noir-voice-status" id="noir-voice-status"></span>
         <input id="noir-input" type="text" placeholder="ask noir something…" autocomplete="off">
         <button class="noir-send" id="noir-send">SEND</button>
       </div>
@@ -1145,9 +1179,154 @@ async function pollVLM() {
 }
 
 // ── Noir agent chat ──────────────────────────────────────────────────────────
+const AUDIO_API = 'http://localhost:8014';
 const noirLog   = document.getElementById('noir-log');
 const noirInput = document.getElementById('noir-input');
 let _noirBusy   = false;
+
+// ── Hold-to-speak voice pipeline ─────────────────────────────────────────────
+const micBtn         = document.getElementById('noir-mic');
+const voiceStatus    = document.getElementById('noir-voice-status');
+// states: idle | recording | transcribing | thinking | speaking
+let _voiceState      = 'idle';
+let _mediaRecorder   = null;
+let _audioChunks     = [];
+let _micStream       = null;
+
+function _setVoiceState(state) {
+  _voiceState = state;
+  const labels = { idle: '', recording: 'listening…', transcribing: 'transcribing…', thinking: 'thinking…', speaking: 'speaking…' };
+  voiceStatus.textContent = labels[state] || '';
+  if (state === 'recording') {
+    micBtn.classList.add('recording');
+  } else {
+    micBtn.classList.remove('recording');
+  }
+}
+
+async function _startRecording() {
+  if (_voiceState !== 'idle' || _noirBusy) return;
+  try {
+    _micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (err) {
+    voiceStatus.textContent = 'mic blocked';
+    setTimeout(() => { voiceStatus.textContent = ''; }, 2000);
+    return;
+  }
+  _audioChunks = [];
+  _mediaRecorder = new MediaRecorder(_micStream);
+  _mediaRecorder.ondataavailable = e => { if (e.data.size > 0) _audioChunks.push(e.data); };
+  _mediaRecorder.start();
+  _setVoiceState('recording');
+}
+
+async function _stopRecording() {
+  if (_voiceState !== 'recording' || !_mediaRecorder) return;
+  return new Promise(resolve => {
+    _mediaRecorder.onstop = resolve;
+    _mediaRecorder.stop();
+    _micStream?.getTracks().forEach(t => t.stop());
+  });
+}
+
+async function _runVoicePipeline() {
+  if (_audioChunks.length === 0) {
+    _setVoiceState('idle');
+    return;
+  }
+
+  const mimeType = _mediaRecorder?.mimeType || 'audio/webm';
+  const ext = mimeType.includes('mp4') ? 'mp4' : mimeType.includes('ogg') ? 'ogg' : 'webm';
+  const blob = new Blob(_audioChunks, { type: mimeType });
+  _audioChunks = [];
+
+  // 1 — STT
+  _setVoiceState('transcribing');
+  let transcript = '';
+  try {
+    const form = new FormData();
+    form.append('file', blob, `audio.${ext}`);
+    const sttRes = await fetch(`${AUDIO_API}/audio/stt`, { method: 'POST', body: form, signal: AbortSignal.timeout(30000) });
+    if (sttRes.ok) {
+      const sttData = await sttRes.json();
+      transcript = (sttData.text || '').trim();
+    }
+  } catch { /* fall through with empty transcript */ }
+
+  if (!transcript) {
+    voiceStatus.textContent = 'no speech detected';
+    setTimeout(() => _setVoiceState('idle'), 1500);
+    return;
+  }
+
+  // 2 — Agent chat
+  _setVoiceState('thinking');
+  _noirBusy = true;
+  noirInput.disabled = true;
+  noirAppend('user', transcript);
+  const thinking = noirAppendThinking();
+  const data = await chatPost('/agent/chat', { message: transcript });
+  thinking.remove();
+  _noirBusy = false;
+  noirInput.disabled = false;
+
+  let replyText = '';
+  if (data) {
+    replyText = data.reply || '…';
+    noirAppend('noir', replyText, data.tool_calls);
+  } else {
+    const wrap = document.createElement('div');
+    wrap.className = 'noir-msg';
+    wrap.innerHTML = '<div class="noir-who noir">NOIR</div><div class="noir-err">[no response — bridge down?]</div>';
+    noirLog.appendChild(wrap);
+    noirLog.scrollTop = noirLog.scrollHeight;
+    _setVoiceState('idle');
+    return;
+  }
+
+  // 3 — TTS
+  if (replyText && replyText !== '…') {
+    _setVoiceState('speaking');
+    try {
+      const ttsRes = await fetch(`${AUDIO_API}/audio/tts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: replyText }),
+        signal: AbortSignal.timeout(30000),
+      });
+      if (ttsRes.ok) {
+        const audioBlob = await ttsRes.blob();
+        const audioUrl  = URL.createObjectURL(audioBlob);
+        const audio     = new Audio(audioUrl);
+        audio.onended = () => { URL.revokeObjectURL(audioUrl); _setVoiceState('idle'); };
+        audio.onerror = () => { URL.revokeObjectURL(audioUrl); _setVoiceState('idle'); };
+        await audio.play();
+        return; // state transitions via audio events
+      }
+    } catch { /* TTS failed — still show text, just don't play */ }
+  }
+
+  _setVoiceState('idle');
+}
+
+micBtn.addEventListener('mousedown',  _startRecording);
+micBtn.addEventListener('touchstart', _startRecording, { passive: true });
+
+micBtn.addEventListener('mouseup', async () => {
+  await _stopRecording();
+  await _runVoicePipeline();
+});
+micBtn.addEventListener('mouseleave', async () => {
+  if (_voiceState === 'recording') {
+    await _stopRecording();
+    await _runVoicePipeline();
+  }
+});
+micBtn.addEventListener('touchend', async e => {
+  e.preventDefault();
+  await _stopRecording();
+  await _runVoicePipeline();
+});
 
 
 function noirAppend(role, text, calls) {

@@ -21,10 +21,10 @@ import redis as redis_lib
 import requests
 from PIL import Image
 
-REDIS_URL    = os.getenv("REDIS_URL",  "redis://localhost:6380")
-OLLAMA_URL   = os.getenv("OLLAMA_URL", "http://localhost:11434")
-VLM_MODEL    = os.getenv("VLM_MODEL",  "qwen3-vl:2b-instruct")
-VLM_INTERVAL = float(os.getenv("VLM_INTERVAL", "2.0"))
+REDIS_URL    = os.getenv("REDIS_URL",    "redis://localhost:6380")
+MLX_VLM_URL  = os.getenv("MLX_VLM_URL",  "http://localhost:8000")
+VLM_MODEL    = os.getenv("VLM_MODEL",    "mlx-community/Qwen3-VL-2B-Instruct-4bit")
+VLM_INTERVAL = float(os.getenv("VLM_INTERVAL", "5.0"))
 VLM_SIZE     = int(os.getenv("VLM_SIZE", "384"))
 
 _PROMPT = (
@@ -43,24 +43,29 @@ def _resize_b64(b64_jpeg: str, size: int) -> str:
 
 def _describe(b64_jpeg: str) -> str:
     b64 = _resize_b64(b64_jpeg, VLM_SIZE)
+    data_url = f"data:image/jpeg;base64,{b64}"
     resp = requests.post(
-        f"{OLLAMA_URL}/api/generate",
+        f"{MLX_VLM_URL}/v1/chat/completions",
+        headers={"Content-Type": "application/json"},
         json={
             "model": VLM_MODEL,
-            "prompt": _PROMPT,
-            "images": [b64],
+            "messages": [{"role": "user", "content": [
+                {"type": "image_url", "image_url": {"url": data_url}},
+                {"type": "text", "text": _PROMPT},
+            ]}],
+            "temperature": 0.0,
+            "max_tokens": 80,
             "stream": False,
-            "options": {"temperature": 0.0, "num_predict": 80},
         },
         timeout=30,
     )
     resp.raise_for_status()
-    return resp.json().get("response", "").strip()
+    return (resp.json().get("choices") or [{}])[0].get("message", {}).get("content", "").strip()
 
 
 def main():
     r = redis_lib.from_url(REDIS_URL, decode_responses=True)
-    print(f"[vlm] model={VLM_MODEL}  size={VLM_SIZE}  interval={VLM_INTERVAL}s", flush=True)
+    print(f"[vlm] model={VLM_MODEL}  size={VLM_SIZE}  interval={VLM_INTERVAL}s  server={MLX_VLM_URL}", flush=True)
 
     last_cam_ts = None
 

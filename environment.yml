@@ -24,3 +24,9 @@ dependencies:
     # face recognition
     - insightface>=0.7.3
     - onnxruntime>=1.17.0
+    # mlx inference stack (VLM, STT, TTS)
+    - vllm-mlx>=0.2.9
+    - parakeet-mlx
+    - mlx-audio
+    - python-multipart
+    - soundfile
