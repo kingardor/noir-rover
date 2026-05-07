@@ -337,7 +337,7 @@ def main():
 
             fwd    = LY * fwdmax
             strafe = RX * fwdmax
-            rotate = (RB - LB) * rotmax
+            rotate = (LB - RB) * rotmax
 
             moving = abs(fwd) > 1e-3 or abs(strafe) > 1e-3 or abs(rotate) > 1e-3
 
