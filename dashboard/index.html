@@ -7,6 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Orbitron:wght@700;900&display=swap" rel="stylesheet">
+  <script src="https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
   <style>
     /* ── Design Tokens ─────────────────────────────────────────────────────── */
     :root {
@@ -761,6 +762,84 @@
       .noir-log { font-size: 10px; }
       .right { height: 400px; }
     }
+
+    /* ── Tab switcher ──────────────────────────────────────────────────────── */
+    .tab-bar { display: flex; gap: 4px; align-items: center; }
+    .tab-btn {
+      font-family: var(--font-hd);
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: .14em;
+      padding: 5px 14px;
+      background: none;
+      border: 1px solid var(--border-hi);
+      color: var(--fg-dim);
+      cursor: pointer;
+      transition: all 150ms;
+      clip-path: polygon(5px 0,calc(100% - 5px) 0,100% 5px,100% calc(100% - 5px),calc(100% - 5px) 100%,5px 100%,0 calc(100% - 5px),0 5px);
+      white-space: nowrap;
+    }
+    .tab-btn.active {
+      color: var(--accent);
+      border-color: rgba(0,255,136,.5);
+      background: rgba(0,255,136,.08);
+      box-shadow: 0 0 12px rgba(0,255,136,.25);
+    }
+    .tab-btn:hover:not(.active) { color: var(--fg); border-color: rgba(255,255,255,.25); }
+
+    /* ── Knowledge panel ───────────────────────────────────────────────────── */
+    #kg-panel {
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
+      gap: 10px;
+      padding: 10px;
+    }
+    .kg-graph-wrap {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+    #kg-graph {
+      flex: 1;
+      min-height: 0;
+      background: radial-gradient(ellipse at center, #0a0a14 0%, #000 100%);
+    }
+    .kg-side {
+      width: 340px;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      min-height: 0;
+      overflow: hidden;
+    }
+    .kg-node-card { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+    .kg-node-body { padding: 10px 12px; overflow-y: auto; flex: 1; font-size: 11px; color: var(--fg-dim); }
+    .kg-images { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+    .kg-thumb {
+      width: 80px; height: 60px;
+      object-fit: cover;
+      border: 1px solid var(--border-hi);
+      clip-path: polygon(3px 0,calc(100% - 3px) 0,100% 3px,100% calc(100% - 3px),calc(100% - 3px) 100%,3px 100%,0 calc(100% - 3px),0 3px);
+      cursor: zoom-in;
+      transition: border-color 150ms;
+    }
+    .kg-thumb:hover { border-color: rgba(0,212,255,.7); }
+    .kg-diary-card { flex-shrink: 0; max-height: 240px; overflow: hidden; display: flex; flex-direction: column; }
+    .kg-diary-body { padding: 8px 12px; font-size: 11px; color: var(--fg); line-height: 1.5; overflow-y: auto; flex: 1; font-style: italic; }
+    .diary-date-input {
+      background: var(--card2);
+      border: 1px solid var(--border-hi);
+      color: var(--fg);
+      font-family: var(--font-bd);
+      font-size: 9px;
+      padding: 2px 6px;
+      outline: none;
+      clip-path: polygon(3px 0,calc(100% - 3px) 0,100% 3px,100% calc(100% - 3px),calc(100% - 3px) 100%,3px 100%,0 calc(100% - 3px),0 3px);
+    }
   </style>
 </head>
 <body>
@@ -782,6 +861,11 @@
     </div>
   </div>
 
+  <div class="tab-bar">
+    <button class="tab-btn active" id="tab-camera" onclick="switchTab('camera')">CAMERA</button>
+    <button class="tab-btn" id="tab-knowledge" onclick="switchTab('knowledge')">KNOWLEDGE</button>
+  </div>
+
   <div class="hdr-spacer"></div>
 
   <!-- E-STOP -->
@@ -792,7 +876,7 @@
 </header>
 
 <!-- ═══════════════════════════════ MAIN ═════════════════════════════════════ -->
-<div class="main">
+<div class="main" id="main-content">
 
   <!-- ── Left column ─────────────────────────────────────────────────────── -->
   <div class="left">
@@ -937,6 +1021,36 @@
       </div>
     </div>
 
+  </div>
+</div>
+
+<!-- ═══════════════════════════════ KNOWLEDGE PANEL ═════════════════════════ -->
+<div id="kg-panel" style="display:none">
+  <!-- Graph area -->
+  <div class="card card--cyan kg-graph-wrap">
+    <div class="card-hdr">
+      KNOWLEDGE <span class="hl">// GRAPH</span>
+      <span id="kg-count" class="badge">—</span>
+      <button class="noir-reset" id="kg-reset-btn" onclick="kgResetConfirm()">RESET</button>
+    </div>
+    <div id="kg-graph"></div>
+  </div>
+  <!-- Right side: node detail + diary -->
+  <div class="kg-side">
+    <div class="card card--cyan kg-node-card">
+      <div class="card-hdr">NODE <span class="hl">// DETAIL</span></div>
+      <div class="kg-node-body" id="kg-node-body">Click a node to inspect it.</div>
+    </div>
+    <div class="card card--amber kg-diary-card">
+      <div class="card-hdr">
+        DIARY <span class="hl">// NOIR</span>
+        <div style="display:flex;gap:5px;align-items:center;">
+          <input type="date" id="diary-date" class="diary-date-input">
+          <button class="noir-reset" onclick="loadDiary()">GEN</button>
+        </div>
+      </div>
+      <div class="kg-diary-body" id="kg-diary-text">select a date and press GEN…</div>
+    </div>
   </div>
 </div>
 
@@ -1724,6 +1838,177 @@ async function pollFollow() {
   }
 }
 
+// ── Knowledge Graph ───────────────────────────────────────────────────────────
+
+let _kgNetwork   = null;
+let _kgNodes     = null;
+let _kgEdges     = null;
+let _currentTab  = 'camera';
+let _kgResetArmed = false;
+let _kgResetTimer = null;
+
+const _NODE_COLORS = {
+  object: { background: '#00D4FF', border: '#0099BB', highlight: { background: '#33DDFF', border: '#00AACC' } },
+  event:  { background: '#FFB347', border: '#CC8800', highlight: { background: '#FFC560', border: '#DD9900' } },
+  person: { background: '#CC00FF', border: '#880099', highlight: { background: '#DD33FF', border: '#AA00CC' } },
+};
+
+function initKGNetwork() {
+  const container = document.getElementById('kg-graph');
+  _kgNodes = new vis.DataSet([]);
+  _kgEdges = new vis.DataSet([]);
+  _kgNetwork = new vis.Network(container, { nodes: _kgNodes, edges: _kgEdges }, {
+    nodes: {
+      shape: 'dot', size: 14,
+      font: { color: '#D8D8E8', face: 'JetBrains Mono', size: 11 },
+      borderWidth: 2,
+    },
+    edges: {
+      color: { color: '#282840', highlight: '#00FF88', hover: '#00FF88' },
+      width: 1.5,
+      smooth: { type: 'curvedCW', roundness: 0.2 },
+      arrows: { to: { enabled: true, scaleFactor: 0.5 } },
+      font: { color: '#454568', size: 9, face: 'JetBrains Mono', strokeWidth: 0 },
+    },
+    physics: {
+      stabilization: { iterations: 100 },
+      barnesHut: { gravitationalConstant: -10000, springLength: 140, springConstant: 0.04, damping: 0.09 },
+    },
+    interaction: { hover: true, tooltipDelay: 100 },
+  });
+  _kgNetwork.on('click', params => {
+    if (params.nodes.length > 0) showKGNodeDetail(params.nodes[0]);
+  });
+}
+
+async function pollKG() {
+  if (_currentTab !== 'knowledge') return;
+  const d = await apiFetch('/kg/graph');
+  if (!d) return;
+
+  const counts = d.counts || {};
+  const total = (counts.object||0) + (counts.event||0) + (counts.person||0);
+  document.getElementById('kg-count').textContent =
+    total ? `${counts.object||0} obj · ${counts.event||0} evt · ${counts.person||0} ppl` : 'empty';
+
+  if (!_kgNetwork) initKGNetwork();
+
+  const newNodes = (d.nodes || []).map(n => ({
+    id: n.id,
+    label: n.label,
+    color: _NODE_COLORS[n.type] || { background: '#666', border: '#444' },
+    title: `${n.type}: ${n.label}`,
+  }));
+  const existingIds = new Set(_kgNodes.getIds());
+  const newIds = new Set(newNodes.map(n => n.id));
+  _kgNodes.update(newNodes);
+  existingIds.forEach(id => { if (!newIds.has(id)) _kgNodes.remove(id); });
+
+  const edgeId = e => `${e.from}__${e.rel}__${e.to}`;
+  const newEdges = (d.edges || []).map(e => ({
+    id: edgeId(e), from: e.from, to: e.to,
+    label: e.rel.replace(/_/g, ' '),
+  }));
+  const existingEIds = new Set(_kgEdges.getIds());
+  const newEIds = new Set(newEdges.map(e => e.id));
+  _kgEdges.update(newEdges);
+  existingEIds.forEach(id => { if (!newEIds.has(id)) _kgEdges.remove(id); });
+}
+
+async function showKGNodeDetail(nodeId) {
+  const body = document.getElementById('kg-node-body');
+  body.textContent = 'loading…';
+  const d = await apiFetch(`/kg/node/${nodeId}`);
+  if (!d) { body.textContent = 'failed to load node'; return; }
+
+  const fmt = ts => ts ? new Date(ts * 1000).toLocaleString() : '--';
+  const typeColor = { object: 'var(--cyan)', event: 'var(--amber)', person: 'var(--magenta)' };
+
+  let html = `
+    <div style="margin-bottom:8px;">
+      <span style="font-family:var(--font-hd);font-size:9px;letter-spacing:.14em;color:${typeColor[d.type]||'var(--fg-dim)'}">
+        ${(d.type||'').toUpperCase()}
+      </span>
+    </div>
+    <div style="font-size:15px;color:var(--fg);font-weight:500;margin-bottom:10px;">${d.label}</div>
+    <div class="s-lbl">FIRST SEEN</div>
+    <div style="margin-bottom:6px;color:var(--fg)">${fmt(d.first_seen || d.ts)}</div>
+    <div class="s-lbl">LAST SEEN</div>
+    <div style="margin-bottom:10px;color:var(--fg)">${fmt(d.last_seen || d.ts)}</div>
+  `;
+
+  if (d.images && d.images.length) {
+    html += `<div class="s-lbl" style="margin-bottom:6px">IMAGES (${d.images.length})</div>`;
+    html += `<div class="kg-images">` +
+      d.images.slice(0, 6).map(img =>
+        `<img src="${API}/kg/image/${img.id}" class="kg-thumb" alt="${d.label}" loading="lazy">`
+      ).join('') +
+    `</div>`;
+  } else {
+    html += `<div style="color:var(--fg-dim);font-size:10px;margin-top:6px;">no images attached</div>`;
+  }
+
+  body.innerHTML = html;
+}
+
+async function loadDiary() {
+  const input = document.getElementById('diary-date');
+  const date = input.value || new Date().toISOString().slice(0, 10);
+  const el = document.getElementById('kg-diary-text');
+  el.textContent = 'generating…';
+  el.style.color = 'var(--fg-dim)';
+  const d = await apiFetch(`/kg/diary?date=${date}`);
+  if (d && d.text) {
+    el.textContent = d.text;
+    el.style.color = d.cached ? 'rgba(216,216,232,.7)' : 'var(--fg)';
+  } else {
+    el.textContent = 'no diary entry for this date';
+  }
+}
+
+function kgResetConfirm() {
+  const btn = document.getElementById('kg-reset-btn');
+  if (!_kgResetArmed) {
+    _kgResetArmed = true;
+    btn.textContent = 'CONFIRM?';
+    btn.style.color = 'var(--red)';
+    btn.style.borderColor = 'rgba(255,34,85,.5)';
+    _kgResetTimer = setTimeout(() => {
+      _kgResetArmed = false;
+      btn.textContent = 'RESET';
+      btn.style.color = '';
+      btn.style.borderColor = '';
+    }, 3000);
+  } else {
+    clearTimeout(_kgResetTimer);
+    _kgResetArmed = false;
+    btn.textContent = 'RESET';
+    btn.style.color = '';
+    btn.style.borderColor = '';
+    apiPost('/kg/reset', {}).then(() => {
+      if (_kgNodes) { _kgNodes.clear(); _kgEdges.clear(); }
+      document.getElementById('kg-count').textContent = 'empty';
+      document.getElementById('kg-node-body').textContent = 'KG wiped.';
+      toast('Knowledge graph reset', true);
+    });
+  }
+}
+
+function switchTab(name) {
+  _currentTab = name;
+  document.getElementById('tab-camera').classList.toggle('active', name === 'camera');
+  document.getElementById('tab-knowledge').classList.toggle('active', name === 'knowledge');
+  document.getElementById('main-content').style.display = name === 'camera' ? '' : 'none';
+  const kgEl = document.getElementById('kg-panel');
+  kgEl.style.display = name === 'knowledge' ? 'flex' : 'none';
+  if (name === 'knowledge') {
+    if (!_kgNetwork) initKGNetwork();
+    pollKG();
+    const di = document.getElementById('diary-date');
+    if (!di.value) di.value = new Date().toISOString().slice(0, 10);
+  }
+}
+
 // ── Poll loop ─────────────────────────────────────────────────────────────────
 function tick() {
   pollStatus();
@@ -1737,6 +2022,7 @@ tick();
 setInterval(tick, 1000);
 setInterval(pollVLM, 1000);
 setInterval(pollFaces, 500);
+setInterval(pollKG, 2000);
 pollVLM();
 pollFaces();
 </script>

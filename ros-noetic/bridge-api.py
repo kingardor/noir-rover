@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import asyncio
 import base64
+import datetime
 import json
 import math
 import os
@@ -495,6 +496,13 @@ _TOOLS = [
             "target_name": {"type": "string",  "description": "Name of the person to follow (must be a recognized face)"},
         }, "required": ["on"]}}},
     {"type": "function", "function": {
+        "name": "recall",
+        "description": "Search the robot's knowledge graph for an object, person, or event it has previously observed. Returns matching nodes with timestamps. Use for 'have you seen X?', 'where is Y?', or 'who was here?' questions.",
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string", "description": "What to search for (object name, person name, or event description)"},
+        }, "required": ["query"]}}},
+
+    {"type": "function", "function": {
         "name": "capture_and_describe",
         "description": (
             "Capture a live camera frame right now and answer a specific visual question using the robot's vision model. "
@@ -734,6 +742,36 @@ def _tool_capture_and_describe(question: str) -> dict:
         return {"text": "", "error": str(e)}
 
 
+def _get_kg_snapshot() -> dict:
+    try:
+        raw = _redis().get("kg:snapshot")
+        return json.loads(raw) if raw else {}
+    except Exception:
+        return {}
+
+
+def _tool_recall(query: str) -> dict:
+    snap = _get_kg_snapshot()
+    nodes = snap.get("nodes", [])
+    q = query.lower()
+    hits = []
+    for n in nodes:
+        label = (n.get("label") or "").lower()
+        if q in label or label in q:
+            hit = {
+                "type": n.get("type"),
+                "label": n.get("label"),
+                "last_seen": n.get("last_seen"),
+                "first_seen": n.get("first_seen"),
+            }
+            imgs = snap.get("node_images", {}).get(n["id"], [])
+            if imgs:
+                hit["image_id"] = imgs[0]["id"]
+            hits.append(hit)
+    hits.sort(key=lambda x: x.get("last_seen") or 0, reverse=True)
+    return {"hits": hits[:5], "query": query}
+
+
 _TOOL_DISPATCH = {
     "stop":                 _tool_stop,
     "move_forward":         _tool_move_forward,
@@ -748,6 +786,7 @@ _TOOL_DISPATCH = {
     "who_is_here":          _tool_who_is_here,
     "set_follow_mode":      _tool_set_follow_mode,
     "capture_and_describe": _tool_capture_and_describe,
+    "recall":               _tool_recall,
 }
 
 
@@ -1072,3 +1111,106 @@ def memory_recent(n: int = Query(default=20, ge=1, le=100)):
         ]}
     except redis_lib.RedisError:
         return {"events": []}
+
+
+# ── Knowledge Graph ────────────────────────────────────────────────────────────
+
+@app.get("/kg/graph")
+def kg_graph(since: float = Query(default=0.0)):
+    """Full KG snapshot. Optional ?since=unix_ts filters to nodes first_seen after that time."""
+    snap = _get_kg_snapshot()
+    if not snap:
+        return {"nodes": [], "edges": [], "ts": 0, "counts": {}}
+    nodes = snap.get("nodes", [])
+    if since > 0:
+        nodes = [n for n in nodes if (n.get("first_seen") or 0) >= since]
+    return {
+        "nodes": nodes,
+        "edges": snap.get("edges", []),
+        "ts": snap.get("ts", 0),
+        "counts": snap.get("counts", {}),
+    }
+
+
+@app.get("/kg/node/{node_id}")
+def kg_node(node_id: str):
+    """Detail for a single KG node including all attached images."""
+    snap = _get_kg_snapshot()
+    node = next((n for n in snap.get("nodes", []) if n.get("id") == node_id), None)
+    if not node:
+        raise HTTPException(404, "Node not found")
+    return {
+        **node,
+        "images": snap.get("node_images", {}).get(node_id, []),
+    }
+
+
+@app.get("/kg/image/{img_id}")
+def kg_image(img_id: str):
+    """Serve a KG image JPEG by image id."""
+    snap = _get_kg_snapshot()
+    path = snap.get("image_index", {}).get(img_id)
+    if not path or not os.path.exists(path):
+        raise HTTPException(404, "Image not found")
+    with open(path, "rb") as f:
+        return Response(content=f.read(), media_type="image/jpeg")
+
+
+@app.get("/kg/diary")
+def kg_diary(date: str = Query(..., description="YYYY-MM-DD")):
+    """Return a NOIR-voiced diary entry for the given date. Cached 24 h."""
+    cache_key = f"kg:diary:{date}"
+    r = _redis()
+    cached = r.get(cache_key)
+    if cached:
+        return {"date": date, "text": cached, "cached": True}
+
+    try:
+        d = datetime.date.fromisoformat(date)
+    except ValueError:
+        raise HTTPException(400, "date must be YYYY-MM-DD")
+
+    snap = _get_kg_snapshot()
+    day_start = datetime.datetime.combine(d, datetime.time.min).timestamp()
+    day_end   = datetime.datetime.combine(d + datetime.timedelta(days=1), datetime.time.min).timestamp()
+
+    day_nodes = [n for n in snap.get("nodes", [])
+                 if day_start <= (n.get("first_seen") or 0) < day_end]
+    if not day_nodes:
+        return {"date": date, "text": f"Nothing was recorded on {date}.", "cached": False}
+
+    observations = ", ".join(
+        f"{n['type']} '{n['label']}'" for n in day_nodes[:20]
+    )
+    prompt = (
+        f"You are NOIR, a compact wheeled robot. "
+        f"Write a diary entry for {date} in 4-6 sentences, first person, dry noir voice. "
+        f"Observations: {observations}. "
+        f"Diary text only — no labels or headers. /no_think"
+    )
+    url, model, headers = _provider_config()
+    try:
+        resp = requests.post(url, headers=headers, json={
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.7,
+            "max_tokens": 300,
+            "stream": False,
+        }, timeout=30)
+        resp.raise_for_status()
+        text = (resp.json().get("choices") or [{}])[0].get("message", {}).get("content", "").strip()
+    except Exception as e:
+        raise HTTPException(503, f"VLM error: {e}")
+
+    if text:
+        r.set(cache_key, text, ex=86400)
+    return {"date": date, "text": text, "cached": False}
+
+
+@app.post("/kg/reset")
+def kg_reset():
+    """Signal kg_builder to wipe the graph and all stored images."""
+    r = _redis()
+    r.set("kg:reset", "1", ex=30)
+    r.delete("kg:snapshot")
+    return {"ok": True, "message": "Reset signal sent — kg_builder will execute on next tick"}

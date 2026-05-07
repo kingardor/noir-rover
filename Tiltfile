@@ -90,6 +90,14 @@ local_resource(
     resource_deps=['bridge-ready'],
 )
 
+local_resource(
+    'kg',
+    serve_cmd='REDIS_URL=redis://localhost:6380 MLX_VLM_URL=http://localhost:8000 VLM_MODEL=mlx-community/Qwen3-VL-2B-Instruct-4bit /opt/homebrew/opt/micromamba/bin/micromamba run -n noir_env python -u vision/kg_builder.py',
+    deps=['vision/kg_builder.py', 'vision/kg_store.py'],
+    labels=['native'],
+    resource_deps=['bridge-ready', 'vlm-server-ready'],
+)
+
 # Controller — Xbox or PS5 over BT → bridge API. Waits quietly when no controller is paired.
 local_resource(
     'controller',

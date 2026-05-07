@@ -6,6 +6,7 @@ out/
 dataflows/
 ai/*.pt
 mobileclip_blt.ts
+data/kg/
 
 # Catkin workspace — generated from ros-noetic/roller_eye; run: make build-bridge
 catkin_ws/

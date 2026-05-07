@@ -31,3 +31,5 @@ dependencies:
     - misaki[en]
     - python-multipart
     - soundfile
+    # knowledge graph
+    - kuzu>=0.7

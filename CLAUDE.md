@@ -68,6 +68,7 @@ MacBook Air M4 (all native)             Docker VM (Linux containers)
 │ vision/app.py  (YOLOE)   │
 │ vision/vlm.py  (VLM)     │
 │ vision/facerec.py        │
+│ vision/kg_builder.py     │  ← Kuzu KG at data/kg/graph_db/
 │ controllers/driver.py    │
 └──────────┬───────────────┘
            │  ROS TCP (direct — no proxy)
@@ -95,8 +96,10 @@ The `catkin_ws/` directory is gitignored. `make build-bridge` creates it from `r
 ### Native macOS (Python 3.11+)
 - **`vision/app.py`** — YOLOE on MPS. Publishes `vision:latest` JSON and `vision:thumb:{id}` to Redis. Runs `vision/memory.py` as thread.
 - **`vision/memory.py`** — Debounced detection writer to `memory:events` Redis stream.
-- **`vision/vlm.py`** — VLM scene description. Polls `vision:latest` every 2s, calls Ollama (`qwen2.5vl:3b`), stores result in `vlm:latest` (TTL 30s). Set `VLM_MODEL` env to override model.
+- **`vision/vlm.py`** — VLM scene description. Polls `vision:latest` every 5s, calls Qwen3-VL-2B-4bit via `mlx_vlm.server` at `:8000` (OpenAI-compat), stores result in `vlm:latest` (TTL 30s). Set `VLM_MODEL` env to override model.
 - **`vision/facerec.py`** — Face recognition using InsightFace (`buffalo_l`). Polls `vision:latest`, detects + identifies faces against enrolled images in `faces/`, publishes to `face:latest` (TTL 10s). Enrolled images: `faces/<Name>.jpg`. Threshold: 0.35 cosine similarity.
+- **`vision/kg_builder.py`** — Knowledge graph builder. Subscribes to `vision:events` pubsub; on each event checks YOLOE labels against the KG and triggers Qwen3-VL only when a novel label appears or the 30 s cooldown expires. Writes Object/Event/Person nodes to Kuzu, saves JPEG per tick to `data/kg/images/`, publishes `kg:snapshot` (full graph JSON, TTL 300 s) and `kg:updated` pubsub after each change. Handles `kg:reset` signal from bridge. Runs in **noir_env** (kuzu is only installed there).
+- **`vision/kg_store.py`** — Thin Kuzu wrapper. Schema: Object, Event, Person, Image, Diary node tables; INVOLVES, WITNESSED_BY, NEAR, PICTURED_IN, CAPTURED_AT, APPEARS_IN rel tables. Key methods: `add_object`, `add_event`, `add_person`, `touch_label`, `save_image`, `existing_labels`, `query_by_label`, `graph_snapshot`, `get_node_images`. Run `python vision/kg_store.py --self-test` for a CRUD round-trip.
 - **`controllers/driver.py`** — Xbox / PS5 controller loop via GameController.framework at 60 Hz. Stamps `xbox:last_input_ts` in Redis on input.
 
 ## Bridge API endpoints (port 8012)
@@ -125,6 +128,11 @@ The `catkin_ws/` directory is gitignored. `make build-bridge` creates it from `r
 | `GET /faces/detections` | Latest face recognition results (TTL 10s) |
 | `GET /safety/state` | Controller activity + last move age |
 | `GET /memory/recent` | Latest N detection events from memory stream |
+| `GET /kg/graph` | Full KG snapshot `{nodes,edges,counts}`. Optional `?since=unix_ts` to filter |
+| `GET /kg/node/{id}` | Node detail + all attached image metadata |
+| `GET /kg/image/{img_id}` | Serve a KG image JPEG from disk |
+| `GET /kg/diary?date=YYYY-MM-DD` | NOIR-voiced diary entry for the day. Cached 24 h in Redis |
+| `POST /kg/reset` | Signal kg_builder to wipe the graph + images |
 
 ## Safety arbiter
 
@@ -149,6 +157,11 @@ angular.z = rotation (+ = clockwise)
 | `memory:events` | Redis stream | — | `vision/memory.py` |
 | `vlm:latest` | JSON {text,ts,frame_id} | 30s | `vision/vlm.py` |
 | `face:latest` | JSON {faces,ts,frame_id,frame_w,frame_h} | 10s | `vision/facerec.py` |
+| `kg:snapshot` | JSON {nodes,edges,node_images,image_index,counts,ts} | 300s | `vision/kg_builder.py` |
+| `kg:updated` (pubsub) | channel | — | `vision/kg_builder.py` |
+| `kg:last_update` | unix timestamp string | 3600s | `vision/kg_builder.py` |
+| `kg:reset` | sentinel "1" | 30s | `ros-noetic/bridge-api.py` |
+| `kg:diary:{date}` | diary text string | 86400s | `ros-noetic/bridge-api.py` |
 
 ## Custom ROS messages (roller_eye package)
 
