@@ -4,6 +4,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Kill any process already holding :8012 so uvicorn can bind cleanly.
+lsof -ti:8012 | xargs kill -9 2>/dev/null || true
+
 exec /opt/homebrew/opt/micromamba/bin/micromamba run -n ros_env bash -c "
   source $(pwd)/catkin_ws/devel/setup.bash
   cd $(pwd)/ros-noetic
