@@ -84,7 +84,7 @@ local_resource(
 
 local_resource(
     'facerec',
-    serve_cmd='REDIS_URL=redis://localhost:6380 FACEREC_INTERVAL=0.4 /opt/homebrew/opt/micromamba/bin/micromamba run -n noir_env python -u vision/facerec.py',
+    serve_cmd='REDIS_URL=redis://localhost:6380 FACEREC_INTERVAL=0.5 /opt/homebrew/opt/micromamba/bin/micromamba run -n noir_env python -u vision/facerec.py',
     deps=['vision/facerec.py', 'faces/'],
     labels=['native'],
     resource_deps=['bridge-ready'],

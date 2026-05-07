@@ -191,7 +191,7 @@
     /* ── Main grid ──────────────────────────────────────────────────────────── */
     .main {
       display: grid;
-      grid-template-columns: 1fr 420px;
+      grid-template-columns: 1fr 360px;
       gap: 10px;
       padding: 10px;
       flex: 1;
@@ -260,7 +260,7 @@
     .cam-body {
       flex: 1;
       position: relative;
-      background: #000;
+      background: radial-gradient(ellipse at center, #0a0a14 0%, #000 100%);
       display: flex;
       align-items: center;
       justify-content: center;
@@ -268,11 +268,21 @@
       min-height: 0;
     }
 
+    /* Cinematic vignette over camera feed */
+    .cam-body::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,.7) 100%);
+      pointer-events: none;
+      z-index: 1;
+    }
+
     #cam-canvas {
-      width: 100%;
-      height: 100%;
-      object-fit: contain;
       display: block;
+      height: 100%;
+      width: auto;
+      max-width: 100%;
     }
 
     .overlay-toggle {
@@ -292,10 +302,10 @@
     .overlay-toggle.off { color: var(--fg-dim); border-color: var(--border); }
 
     /* HUD corner brackets */
-    .hud { position: absolute; inset: 0; pointer-events: none; }
+    .hud { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
     .hud span {
       position: absolute;
-      width: 22px; height: 22px;
+      width: 28px; height: 28px;
       border-color: var(--accent);
       border-style: solid;
       animation: hud-pulse 3.5s ease-in-out infinite;
@@ -314,6 +324,7 @@
       pointer-events: none;
       animation: scan-sweep 5s linear infinite;
       top: -4px;
+      z-index: 2;
     }
 
     .reticle {
@@ -323,6 +334,7 @@
       width: 30px; height: 30px;
       pointer-events: none;
       opacity: .3;
+      z-index: 2;
     }
     .reticle::before, .reticle::after { content: ''; position: absolute; background: var(--accent); }
     .reticle::before { width: 1px; height: 100%; left: 50%; transform: translateX(-50%); box-shadow: 0 0 4px rgba(0,255,136,.8); }
@@ -333,6 +345,7 @@
       width: 8px; height: 8px;
       background: #000;
       pointer-events: none; opacity: .3;
+      z-index: 2;
     }
 
     .cam-nosig {
@@ -345,15 +358,37 @@
     .cam-nosig svg { width: 44px; height: 44px; opacity: .25; }
     .cam-nosig span { font-family: var(--font-hd); font-size: 10px; letter-spacing: .25em; }
 
-    /* Detections — FIXED height so camera never resizes */
-    .info-row {
+    /* ── Compact telemetry strip (between camera and lower panels) ─────────── */
+    .sensor-strip {
+      flex-shrink: 0;
+      height: 50px;
+      display: flex;
+      gap: 1px;
+      background: var(--border);
+      border: 1px solid rgba(0,212,255,.22);
+      box-shadow: 0 0 16px rgba(0,212,255,.06);
+      clip-path: polygon(4px 0, calc(100% - 4px) 0, 100% 4px, 100% calc(100% - 4px), calc(100% - 4px) 100%, 4px 100%, 0 calc(100% - 4px), 0 4px);
+      overflow: hidden;
+    }
+    .sensor-strip .sensor-cell {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      padding: 4px 10px;
+      background: var(--card);
+    }
+    .sensor-strip .s-lbl { margin-bottom: 1px; }
+
+    /* ── Lower panels — detections, VLM, faces, drive ───────────────────────── */
+    .lower-panels {
       display: flex;
       gap: 10px;
       flex-shrink: 0;
-      height: 130px;
+      height: 155px;
     }
-    .info-row .card { flex: 1; min-width: 0; overflow: hidden; }
-    .det-card { flex: 1.4 !important; }
+    .lower-panels .card { min-width: 0; overflow: hidden; }
 
     .det-body {
       padding: 6px 12px;
@@ -388,10 +423,7 @@
     .det-pct { font-size: 10px; color: var(--accent); text-align: right; }
     .det-empty { padding: 10px 12px; color: var(--fg-dim); font-size: 11px; text-align: center; letter-spacing: .05em; }
 
-    /* ── Left bottom row (sensors + drive side by side) ────────────────────── */
-    .left-bottom { display: flex; gap: 10px; flex-shrink: 0; height: 210px; }
-    .left-bottom .card { min-width: 0; }
-    .left-bottom .sensor-grid { grid-template-columns: repeat(5, 1fr); }
+    /* (left-bottom removed — sensors in strip, drive in lower-panels) */
 
     /* ── Right column — full-height chat ─────────────────────────────────────*/
     .right { display: flex; flex-direction: column; min-height: 0; }
@@ -407,10 +439,10 @@
     /* Drive pad */
     .drive-pad {
       display: grid;
-      grid-template-columns: repeat(3, 40px);
-      grid-template-rows: repeat(3, 36px);
-      gap: 4px;
-      margin: 7px auto;
+      grid-template-columns: repeat(3, 36px);
+      grid-template-rows: repeat(3, 28px);
+      gap: 3px;
+      margin: 5px auto;
     }
     .dp-key {
       display: flex;
@@ -445,8 +477,8 @@
       justify-content: center;
       border: 1px solid rgba(255,255,255,.06);
       clip-path: polygon(50% 0,100% 50%,50% 100%,0 50%);
-      width: 40px;
-      height: 36px;
+      width: 36px;
+      height: 28px;
       font-size: 12px;
       color: var(--fg-dim);
     }
@@ -460,7 +492,7 @@
       font-size: 10px;
       color: var(--fg-dim);
     }
-    .drive-speed input[type=range] { flex: 1; accent-color: var(--cyan); height: 3px; }
+    .drive-speed input[type=range] { flex: 1; min-width: 0; accent-color: var(--cyan); height: 3px; }
     .drive-speed span { min-width: 28px; text-align: right; color: var(--cyan); text-shadow: 0 0 6px rgba(0,212,255,.6); }
 
     /* Memory log */
@@ -631,24 +663,26 @@
     .noir-mic {
       background: none;
       border: none;
+      border-right: 1px solid rgba(204,0,255,.15);
       color: var(--fg-dim);
-      font-size: 16px;
-      width: 36px;
+      width: 40px;
       cursor: pointer;
-      transition: color 150ms;
+      transition: color 150ms, background 150ms;
       flex-shrink: 0;
       display: flex;
       align-items: center;
       justify-content: center;
     }
-    .noir-mic:hover { color: var(--fg); }
+    .noir-mic:hover { color: var(--magenta); background: rgba(204,0,255,.06); }
+    .noir-mic:hover svg { filter: drop-shadow(0 0 4px rgba(204,0,255,.7)); }
     .noir-mic.recording {
       color: var(--red);
+      background: rgba(255,34,85,.07);
       animation: mic-pulse 0.8s ease-in-out infinite alternate;
     }
     @keyframes mic-pulse {
-      from { opacity: 1; }
-      to   { opacity: 0.4; }
+      from { opacity: 1; filter: drop-shadow(0 0 6px rgba(255,34,85,.9)); }
+      to   { opacity: 0.5; filter: drop-shadow(0 0 2px rgba(255,34,85,.4)); }
     }
     .noir-voice-status {
       font-family: var(--font-bd);
@@ -671,6 +705,62 @@
       transition: color 150ms, border-color 150ms, box-shadow 150ms;
     }
     .noir-reset:hover { color: var(--red); border-color: rgba(255,34,85,.5); box-shadow: 0 0 8px rgba(255,34,85,.2); }
+
+    /* ── Responsive ──────────────────────────────────────────────────────────── */
+
+    /* Wide desktop — clamp chat column so it breathes on ultra-wide monitors */
+    @media (min-width: 1600px) {
+      .main { grid-template-columns: 1fr clamp(360px, 26vw, 480px); }
+    }
+
+    /* Compact desktop / laptop — slightly tighter grid */
+    @media (max-width: 1200px) {
+      .main { grid-template-columns: 1fr 320px; }
+    }
+
+    /* Tablet landscape and below — single column, scrollable */
+    @media (max-width: 1024px) {
+      html, body { height: auto; overflow-y: auto; overflow-x: hidden; }
+      body { min-height: 100dvh; }
+      .main {
+        grid-template-columns: 1fr;
+        overflow: visible;
+        height: auto;
+        flex: none;
+      }
+      .left { min-height: 0; }
+      .cam-card { flex: none; height: clamp(200px, 52vw, 480px); }
+      .sensor-strip { overflow-x: auto; scroll-snap-type: x mandatory; }
+      .sensor-strip .sensor-cell { min-width: 70px; scroll-snap-align: start; flex-shrink: 0; }
+      .right { height: 500px; flex-shrink: 0; }
+      .safety { position: sticky; bottom: 0; z-index: 10; }
+    }
+
+    /* Tablet portrait */
+    @media (max-width: 768px) {
+      .hdr { padding: 0 10px; gap: 8px; }
+      .logo { font-size: 13px; }
+      .estop { padding: 5px 12px; font-size: 11px; }
+      .main { padding: 6px; gap: 6px; }
+      .lower-panels { flex-wrap: wrap; height: auto; gap: 6px; }
+      /* VLM gets full width row; det + faces + drive split the second row */
+      .lower-panels .card:nth-child(1) { flex: 1 1 calc(50% - 3px) !important; min-height: 130px; }
+      .lower-panels .card:nth-child(2) { flex: 1 1 100% !important; min-height: 120px; }
+      .lower-panels .card:nth-child(3) { flex: 1 1 calc(50% - 3px) !important; min-height: 130px; }
+      .lower-panels .card:nth-child(4) { flex: 1 1 calc(50% - 3px) !important; min-height: 130px; }
+      .right { height: 440px; }
+    }
+
+    /* Mobile */
+    @media (max-width: 480px) {
+      .hdr-pills { display: none; }
+      .hdr { gap: 6px; }
+      .cam-card { height: clamp(180px, 60vw, 320px); }
+      .main { padding: 4px; gap: 4px; }
+      .lower-panels .card { flex: 1 1 100% !important; min-height: 120px; }
+      .noir-log { font-size: 10px; }
+      .right { height: 400px; }
+    }
   </style>
 </head>
 <body>
@@ -730,10 +820,54 @@
       </div>
     </div>
 
-    <!-- Detections / VLM / Faces — fixed-height horizontal row -->
-    <div class="info-row">
+    <!-- Compact telemetry strip -->
+    <div class="sensor-strip">
+      <div class="sensor-cell">
+        <div class="s-lbl">RANGE</div>
+        <div class="s-val" id="s-range">--<span class="s-unit">m</span></div>
+      </div>
+      <div class="sensor-cell">
+        <div class="s-lbl">BATTERY</div>
+        <div class="s-val" id="s-bat">--<span class="s-unit">%</span> <span class="s-unit" id="s-chg"></span></div>
+      </div>
+      <div class="sensor-cell">
+        <div class="s-lbl">ACCEL X</div>
+        <div class="s-val" id="s-ax">--<span class="s-unit">m/s²</span></div>
+      </div>
+      <div class="sensor-cell">
+        <div class="s-lbl">ACCEL Y</div>
+        <div class="s-val" id="s-ay">--<span class="s-unit">m/s²</span></div>
+      </div>
+      <div class="sensor-cell">
+        <div class="s-lbl">ACCEL Z</div>
+        <div class="s-val" id="s-az">--<span class="s-unit">m/s²</span></div>
+      </div>
+      <div class="sensor-cell">
+        <div class="s-lbl">GYRO Z</div>
+        <div class="s-val" id="s-gz">--<span class="s-unit">rad/s</span></div>
+      </div>
+      <div class="sensor-cell">
+        <div class="s-lbl">POS X</div>
+        <div class="s-val" id="s-vx">--<span class="s-unit">m</span></div>
+      </div>
+      <div class="sensor-cell">
+        <div class="s-lbl">POS Y</div>
+        <div class="s-val" id="s-vy">--<span class="s-unit">m</span></div>
+      </div>
+      <div class="sensor-cell">
+        <div class="s-lbl">SPEED</div>
+        <div class="s-val" id="s-spd">--<span class="s-unit">m/s</span></div>
+      </div>
+      <div class="sensor-cell">
+        <div class="s-lbl">YAW RATE</div>
+        <div class="s-val" id="s-yr">--<span class="s-unit">rad/s</span></div>
+      </div>
+    </div>
 
-      <div class="card det-card card--green">
+    <!-- Lower panels: detections · VLM · faces · drive -->
+    <div class="lower-panels">
+
+      <div class="card card--green" style="flex:1.6">
         <div class="card-hdr">
           DETECTIONS <span class="hl">// YOLOE</span>
           <span class="badge" id="b-dets">0 objects</span>
@@ -743,7 +877,7 @@
         </div>
       </div>
 
-      <div class="card card--cyan" id="vlm-card">
+      <div class="card card--cyan" id="vlm-card" style="flex:2.6">
         <div class="card-hdr">
           SCENE <span class="hl">// VLM</span>
           <span class="badge" id="vlm-age">--</span>
@@ -751,7 +885,7 @@
         <div id="vlm-text" style="padding:8px 12px;font-size:11px;color:var(--fg);line-height:1.5;overflow-y:auto;height:calc(100% - 32px);font-style:italic;">waiting for model…</div>
       </div>
 
-      <div class="card card--magenta" id="face-card">
+      <div class="card card--magenta" id="face-card" style="flex:1">
         <div class="card-hdr">
           FACES <span class="hl">// ID</span>
           <span class="badge" id="b-faces">0</span>
@@ -759,71 +893,15 @@
         <div id="face-body" style="padding:6px 12px;font-size:11px;color:var(--fg-dim);overflow-y:auto;height:calc(100% - 32px);">no faces detected</div>
       </div>
 
-    </div>
-
-    <!-- Sensors + manual drive — fixed-height bottom row -->
-    <div class="left-bottom">
-
-      <!-- Sensor array -->
-      <div class="card card--cyan">
-        <div class="card-hdr">
-          SENSOR ARRAY
-          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-        </div>
-        <div class="sensor-grid">
-          <div class="sensor-cell">
-            <div class="s-lbl">RANGE</div>
-            <div class="s-val" id="s-range">--<span class="s-unit">m</span></div>
-          </div>
-          <div class="sensor-cell">
-            <div class="s-lbl">BATTERY</div>
-            <div class="s-val" id="s-bat">--<span class="s-unit">%</span> <span class="s-unit" id="s-chg"></span></div>
-          </div>
-          <div class="sensor-cell">
-            <div class="s-lbl">ACCEL X</div>
-            <div class="s-val" id="s-ax">--<span class="s-unit">m/s²</span></div>
-          </div>
-          <div class="sensor-cell">
-            <div class="s-lbl">ACCEL Y</div>
-            <div class="s-val" id="s-ay">--<span class="s-unit">m/s²</span></div>
-          </div>
-          <div class="sensor-cell">
-            <div class="s-lbl">ACCEL Z</div>
-            <div class="s-val" id="s-az">--<span class="s-unit">m/s²</span></div>
-          </div>
-          <div class="sensor-cell">
-            <div class="s-lbl">GYRO Z</div>
-            <div class="s-val" id="s-gz">--<span class="s-unit">rad/s</span></div>
-          </div>
-          <div class="sensor-cell">
-            <div class="s-lbl">POS X</div>
-            <div class="s-val" id="s-vx">--<span class="s-unit">m</span></div>
-          </div>
-          <div class="sensor-cell">
-            <div class="s-lbl">POS Y</div>
-            <div class="s-val" id="s-vy">--<span class="s-unit">m</span></div>
-          </div>
-          <div class="sensor-cell">
-            <div class="s-lbl">SPEED</div>
-            <div class="s-val" id="s-spd">--<span class="s-unit">m/s</span></div>
-          </div>
-          <div class="sensor-cell">
-            <div class="s-lbl">YAW RATE</div>
-            <div class="s-val" id="s-yr">--<span class="s-unit">rad/s</span></div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Manual drive -->
-      <div class="card card--amber">
+      <div class="card card--amber" style="flex:1.2">
         <div class="card-hdr">
           MANUAL DRIVE
           <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 19 21 12 17 5 21 12 2"/></svg>
         </div>
         <div class="drive-pad">
-          <div class="dp-key" id="dp-q">Q<span class="dp-sub">ROT ←</span></div>
+          <div class="dp-key" id="dp-q">Q<span class="dp-sub">ROT←</span></div>
           <div class="dp-key" id="dp-w">W<span class="dp-sub">FWD</span></div>
-          <div class="dp-key" id="dp-e">E<span class="dp-sub">ROT →</span></div>
+          <div class="dp-key" id="dp-e">E<span class="dp-sub">ROT→</span></div>
           <div class="dp-key" id="dp-a">A<span class="dp-sub">LEFT</span></div>
           <div class="dp-center">◈</div>
           <div class="dp-key" id="dp-d">D<span class="dp-sub">RIGHT</span></div>
@@ -833,10 +911,9 @@
         </div>
         <div class="drive-speed">
           <span>SPD</span>
-          <input type="range" id="drive-speed" min="10" max="100" value="60" oninput="document.getElementById('spd-val').textContent=this.value+'%'" title="Drive speed multiplier">
-          <span id="spd-val">60%</span>
+          <input type="range" id="drive-speed" min="10" max="100" value="20" oninput="document.getElementById('spd-val').textContent=this.value+'%'" title="Drive speed multiplier">
+          <span id="spd-val">20%</span>
         </div>
-        <div class="drive-hint">WASD · Q/E rotate · hold to move</div>
       </div>
 
     </div>
@@ -853,7 +930,7 @@
       </div>
       <div class="noir-log" id="noir-log"></div>
       <div class="noir-input-row">
-        <button class="noir-mic" id="noir-mic" title="Hold to speak">🎤</button>
+        <button class="noir-mic" id="noir-mic" title="Hold to speak"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/></svg></button>
         <span class="noir-voice-status" id="noir-voice-status"></span>
         <input id="noir-input" type="text" placeholder="ask noir something…" autocomplete="off">
         <button class="noir-send" id="noir-send">SEND</button>
@@ -1402,22 +1479,22 @@ async function _runVoicePipeline() {
   _noirBusy = true;
   noirInput.disabled = true;
   noirAppend('user', transcript);
-  const thinking = noirAppendThinking();
-  const data = await chatPost('/agent/chat', { message: transcript });
-  thinking.remove();
+  const wrap = noirBegin();
+  let replyText = '';
+  let replied = false;
+  await chatStream(transcript, {
+    onTool:  ev => noirAddTool(wrap, ev),
+    onReply: text => {
+      replied = true;
+      replyText = text ?? '';
+      noirFinish(wrap, replyText || '…');
+    },
+  });
+  if (!replied) noirFinish(wrap, '[no response — bridge down?]');
   _noirBusy = false;
   noirInput.disabled = false;
 
-  let replyText = '';
-  if (data) {
-    replyText = data.reply || '…';
-    noirAppend('noir', replyText, data.tool_calls);
-  } else {
-    const wrap = document.createElement('div');
-    wrap.className = 'noir-msg';
-    wrap.innerHTML = '<div class="noir-who noir">NOIR</div><div class="noir-err">[no response — bridge down?]</div>';
-    noirLog.appendChild(wrap);
-    noirLog.scrollTop = noirLog.scrollHeight;
+  if (!replied || !replyText) {
     _setVoiceState('idle');
     return;
   }
@@ -1467,6 +1544,82 @@ micBtn.addEventListener('touchend', async e => {
   await _runVoicePipeline();
 });
 
+
+async function chatStream(message, { onTool, onReply }) {
+  let res;
+  try {
+    res = await fetch(`${API}/agent/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message }),
+      signal: AbortSignal.timeout(120000),
+    });
+  } catch { onReply(null); return; }
+  if (!res.ok || !res.body) { onReply(null); return; }
+
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '';
+  while (true) {
+    let chunk;
+    try { chunk = await reader.read(); } catch { break; }
+    if (chunk.done) break;
+    buf += dec.decode(chunk.value, { stream: true });
+    const lines = buf.split('\n');
+    buf = lines.pop();
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue;
+      try {
+        const ev = JSON.parse(line.slice(6));
+        if (ev.type === 'tool_call') onTool(ev);
+        else if (ev.type === 'reply') onReply(ev.text);
+      } catch { /* malformed line */ }
+    }
+  }
+}
+
+function noirBegin() {
+  const wrap = document.createElement('div');
+  wrap.className = 'noir-msg';
+  const who = document.createElement('div');
+  who.className = 'noir-who noir';
+  who.textContent = 'NOIR';
+  wrap.appendChild(who);
+  const ct = document.createElement('div');
+  ct.className = 'noir-calls';
+  ct.style.display = 'none';
+  wrap.appendChild(ct);
+  const dots = document.createElement('div');
+  dots.className = 'noir-thinking noir-body-msg';
+  dots.style.padding = '6px 10px';
+  dots.innerHTML = '<span></span><span></span><span></span>';
+  wrap.appendChild(dots);
+  noirLog.appendChild(wrap);
+  noirLog.scrollTop = noirLog.scrollHeight;
+  return wrap;
+}
+
+function noirAddTool(wrap, ev) {
+  const ct = wrap.querySelector('.noir-calls');
+  ct.style.display = '';
+  const argsStr = Object.keys(ev.args || {}).length ? JSON.stringify(ev.args) : '';
+  const resultStr = ev.result != null ? JSON.stringify(ev.result) : '';
+  const line = document.createElement('div');
+  line.innerHTML = `→ ${ev.name}(${argsStr})${resultStr ? `<br>&nbsp;&nbsp;↳ ${resultStr}` : ''}`;
+  ct.appendChild(line);
+  noirLog.scrollTop = noirLog.scrollHeight;
+}
+
+function noirFinish(wrap, text) {
+  const dots = wrap.querySelector('.noir-thinking');
+  if (dots) {
+    dots.className = 'noir-body noir-body-msg';
+    dots.style.padding = '';
+    dots.innerHTML = '';
+    dots.textContent = text || '…';
+  }
+  noirLog.scrollTop = noirLog.scrollHeight;
+}
 
 function noirAppend(role, text, calls) {
   const wrap = document.createElement('div');
@@ -1533,21 +1686,19 @@ async function noirSend() {
   _noirBusy = true;
   noirInput.disabled = true;
   noirAppend('user', text);
-  const thinking = noirAppendThinking();
-  const data = await chatPost('/agent/chat', { message: text });
-  thinking.remove();
+  const wrap = noirBegin();
+  let replied = false;
+  await chatStream(text, {
+    onTool:  ev => noirAddTool(wrap, ev),
+    onReply: replyText => {
+      replied = true;
+      noirFinish(wrap, replyText ?? '[no response — bridge down?]');
+    },
+  });
+  if (!replied) noirFinish(wrap, '[no response — bridge down?]');
   _noirBusy = false;
   noirInput.disabled = false;
   noirInput.focus();
-  if (data) {
-    noirAppend('noir', data.reply || '…', data.tool_calls);
-  } else {
-    const wrap = document.createElement('div');
-    wrap.className = 'noir-msg';
-    wrap.innerHTML = '<div class="noir-who noir">NOIR</div><div class="noir-err">[no response — bridge down?]</div>';
-    noirLog.appendChild(wrap);
-    noirLog.scrollTop = noirLog.scrollHeight;
-  }
 }
 
 document.getElementById('noir-send').addEventListener('click', noirSend);

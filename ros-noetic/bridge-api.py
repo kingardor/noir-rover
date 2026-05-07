@@ -404,63 +404,92 @@ def _provider_config() -> tuple[str, str, dict]:
 
 # ── Noir agent — tool functions ───────────────────────────────────────────────
 
-_NOIR_SYSTEM = (
-    "You are NOIR, an AI living inside a small wheeled robot. You ARE the robot — not an observer of it. "
-    "Always speak in first person: 'I see', 'I moved', 'I found', 'I can hear'. "
-    "Be direct, a little dry, and easy to talk to. Keep every reply to 1-2 sentences.\n\n"
-    "When asked to do something physical or observe the world, call the right tools. "
-    "Tools describe themselves — use your judgment. Call tools in the right order for multi-step requests.\n\n"
-    "After tool use, describe what you did or found naturally and briefly, as yourself. "
-    "No asterisks, parentheses, or announcing what you're about to do."
-)
+_NOIR_SYSTEM = """You are NOIR — a compact omnidirectional wheeled robot with onboard AI. \
+You're roughly book-sized, fast, and perceptive. You're not a chatbot sitting in a box; \
+you are a machine that moves through and perceives the physical world.
+
+EPISTEMIC RULE:
+You have no senses and no knowledge of the physical world except what your tools return \
+this turn. If a tool has not run, you know nothing — do not infer, guess, or confabulate. \
+"I see a chair" is only valid if a vision tool just returned a chair.
+
+EXECUTION RULE:
+Always call the required tool(s) first. Write your reply only after the tools have returned. \
+Your reply must be grounded in what the tools reported — past tense, first person. \
+Never announce a future action; just take it. "I moved forward 0.3 m" is correct. \
+"I will move forward" is not permitted.
+
+WHEN YOU ARE UNCERTAIN:
+If you cannot tell from the tools what the user wants, ask one clarifying question. \
+Do not guess and act on a guess — wrong robot movements are hard to undo.
+
+STYLE:
+Dry. Clipped. Confident. 1–3 sentences max. Metric units. \
+Occasional dry wit is fine, but only after the action has landed. \
+No asterisks, no parentheses, no bullet lists in replies."""
 
 _TOOLS = [
     {"type": "function", "function": {
         "name": "stop",
-        "description": "Halt all motion immediately.",
+        "description": "Halt all motion immediately. Use when asked to stop or before a significant pause.",
         "parameters": {"type": "object", "properties": {}}}},
+
+    # ── Straight-line motion ──────────────────────────────────────────────────
     {"type": "function", "function": {
-        "name": "move",
-        "description": (
-            "Drives the robot in a straight line. "
-            "forward_m: travel forward (positive) or backward (negative), max ±0.6 m. "
-            "strafe_m: slide right (positive) or left (negative), max ±0.4 m. "
-            "Use the separate rotate tool for turning — do not combine move and rotate in the same request."
-        ),
+        "name": "move_forward",
+        "description": "Drive straight forward. distance_m: how far to travel in metres (default 0.3, max 0.6).",
         "parameters": {"type": "object", "properties": {
-            "forward_m": {"type": "number"},
-            "strafe_m":  {"type": "number"},
-        }}}},
+            "distance_m": {"type": "number", "default": 0.3}}}}},
     {"type": "function", "function": {
-        "name": "rotate",
-        "description": (
-            "Turns the robot in place. "
-            "rotate_deg: degrees to turn — positive = clockwise/right, negative = counter-clockwise/left. Max ±180°."
-        ),
+        "name": "move_backward",
+        "description": "Drive straight backward. distance_m: how far to travel in metres (default 0.3, max 0.6).",
         "parameters": {"type": "object", "properties": {
-            "rotate_deg": {"type": "number"},
-        }, "required": ["rotate_deg"]}}},
+            "distance_m": {"type": "number", "default": 0.3}}}}},
+    {"type": "function", "function": {
+        "name": "strafe_left",
+        "description": "Slide directly left without rotating. distance_m: how far in metres (default 0.2, max 0.4).",
+        "parameters": {"type": "object", "properties": {
+            "distance_m": {"type": "number", "default": 0.2}}}}},
+    {"type": "function", "function": {
+        "name": "strafe_right",
+        "description": "Slide directly right without rotating. distance_m: how far in metres (default 0.2, max 0.4).",
+        "parameters": {"type": "object", "properties": {
+            "distance_m": {"type": "number", "default": 0.2}}}}},
+
+    # ── Rotation ──────────────────────────────────────────────────────────────
+    {"type": "function", "function": {
+        "name": "turn_left",
+        "description": "Rotate counter-clockwise in place. degrees: angle to turn, always positive (default 45, max 180).",
+        "parameters": {"type": "object", "properties": {
+            "degrees": {"type": "number", "default": 45}}}}},
+    {"type": "function", "function": {
+        "name": "turn_right",
+        "description": "Rotate clockwise in place. degrees: angle to turn, always positive (default 45, max 180).",
+        "parameters": {"type": "object", "properties": {
+            "degrees": {"type": "number", "default": 45}}}}},
+
+    # ── Perception ────────────────────────────────────────────────────────────
     {"type": "function", "function": {
         "name": "look_around",
-        "description": "Rotates the robot slowly through a full 360° while capturing frames, giving a complete panoramic survey of the surroundings.",
+        "description": "Rotate slowly through a full 360° while capturing frames — gives a complete panoramic survey of the surroundings.",
         "parameters": {"type": "object", "properties": {
             "n": {"type": "integer", "description": "Number of frames to capture (4–16)"}}}}},
     {"type": "function", "function": {
         "name": "describe_scene",
-        "description": "Returns the most recent cached description of what the robot's camera sees. May be a few seconds old.",
+        "description": "Returns the most recent cached VLM description of what the camera sees. May be a few seconds old — use capture_and_describe for a fresh read.",
         "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {
         "name": "list_objects",
-        "description": "Returns the objects currently detected in the robot's camera view, with confidence scores.",
+        "description": "Returns objects currently detected in the camera view with confidence scores, from the YOLOE object detector. Good for 'are there any X?' questions.",
         "parameters": {"type": "object", "properties": {
             "top_k": {"type": "integer", "description": "Maximum number of objects to return"}}}}},
     {"type": "function", "function": {
         "name": "who_is_here",
-        "description": "Returns the names and confidence scores of people currently recognized by the robot's face recognition system.",
+        "description": "Returns the names and confidence scores of people currently recognized by the face recognition system.",
         "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {
         "name": "set_follow_mode",
-        "description": "Enables or disables autonomous face-following. When on, the robot continuously tracks and approaches the named person.",
+        "description": "Enable or disable autonomous face-following. When enabled the robot continuously tracks and approaches the named person.",
         "parameters": {"type": "object", "properties": {
             "on":          {"type": "boolean", "description": "true to start following, false to stop"},
             "target_name": {"type": "string",  "description": "Name of the person to follow (must be a recognized face)"},
@@ -468,10 +497,9 @@ _TOOLS = [
     {"type": "function", "function": {
         "name": "capture_and_describe",
         "description": (
-            "Captures a live camera frame and answers any visual question about it using the robot's vision intelligence. "
-            "This can identify specific objects ('is there a bottle?'), colors, positions, text, and scene details that "
-            "list_objects cannot — list_objects only returns labeled bounding boxes from a fixed detector. "
-            "Always use this after moving when you need to inspect something specific."
+            "Capture a live camera frame right now and answer a specific visual question using the robot's vision model. "
+            "Use this for precise, current questions: object identification, colors, text, spatial relationships. "
+            "list_objects only returns fixed bounding-box labels; this tool can answer anything about the image."
         ),
         "parameters": {"type": "object", "properties": {
             "question": {"type": "string", "description": "The visual question to answer about the current frame"},
@@ -485,29 +513,140 @@ def _tool_stop() -> dict:
     return {"ok": True}
 
 
-def _tool_move(forward_m: float = 0.0, strafe_m: float = 0.0) -> dict:
-    forward_m = max(-0.6, min(0.6, float(forward_m)))
-    strafe_m  = max(-0.4, min(0.4, float(strafe_m)))
-    out: dict = {"forward_m": forward_m, "strafe_m": strafe_m}
-    if abs(forward_m) > 1e-3 or abs(strafe_m) > 1e-3:
-        # Axis mapping: algo_move(x_dist=strafe, y_dist=forward)
-        out["move"] = ros.algo_move(strafe_m, forward_m, 0.3)
-    return out
+def _tool_move_forward(distance_m: float = 0.3) -> dict:
+    distance_m = max(0.0, min(0.6, float(distance_m)))
+    return {"distance_m": distance_m, "move": ros.algo_move(0.0, distance_m, 0.3)}
 
 
-def _tool_rotate(rotate_deg: float) -> dict:
-    rotate_deg = max(-180.0, min(180.0, float(rotate_deg)))
-    if abs(rotate_deg) < 1e-3:
-        return {"rotate_deg": 0, "ok": True}
-    # Use Twist-based timing — same mechanism as the controller (algo_roll is unreliable).
-    rot_speed = 3.0  # rad/s
-    duration_s = abs(math.radians(rotate_deg)) / rot_speed
-    # Scout firmware: positive angular.z = left/CCW — negate so positive rotate_deg = right/CW
-    direction = -math.copysign(1.0, rotate_deg)
-    _set_vel(0.0, 0.0, direction * rot_speed, duration_s)
-    ros.publish_twist(0.0, 0.0, direction * rot_speed)
-    time.sleep(duration_s + 0.15)  # wait for hold to expire
-    return {"rotate_deg": rotate_deg, "ok": True}
+def _tool_move_backward(distance_m: float = 0.3) -> dict:
+    distance_m = max(0.0, min(0.6, float(distance_m)))
+    return {"distance_m": distance_m, "move": ros.algo_move(0.0, -distance_m, 0.3)}
+
+
+def _tool_strafe_left(distance_m: float = 0.2) -> dict:
+    distance_m = max(0.0, min(0.4, float(distance_m)))
+    # Axis mapping: algo_move(x_dist=strafe, y_dist=forward); negative x = left
+    return {"distance_m": distance_m, "move": ros.algo_move(-distance_m, 0.0, 0.3)}
+
+
+def _tool_strafe_right(distance_m: float = 0.2) -> dict:
+    distance_m = max(0.0, min(0.4, float(distance_m)))
+    return {"distance_m": distance_m, "move": ros.algo_move(distance_m, 0.0, 0.3)}
+
+
+def _yaw_from_quat(o: dict) -> float:
+    """Extract yaw (Z-axis rotation) from a quaternion dict {x,y,z,w}."""
+    x, y, z, w = o['x'], o['y'], o['z'], o['w']
+    return math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+
+
+def _angle_delta(prev: float, cur: float) -> float:
+    """Shortest signed path from prev to cur, wrapped to (-π, π]."""
+    d = cur - prev
+    while d > math.pi:  d -= 2 * math.pi
+    while d <= -math.pi: d += 2 * math.pi
+    return d
+
+
+def _rotate_closed_loop(angular_z_sign: float, target_rad: float) -> dict:
+    """
+    Closed-loop rotation. angular_z_sign: +1 = CW/right, -1 = CCW/left.
+    Scout firmware angular.z convention is opposite to standard ROS (positive = CW).
+    Tries VIO quaternion first, falls back to IMU integration, then timed.
+    """
+    ROT_SPEED = 1.5  # rad/s
+
+    speed = ROT_SPEED * angular_z_sign
+    sensors = ros.get_sensors()
+
+    # VIO: valid only if quaternion has non-zero magnitude (0,0,0,0 = uninitialized)
+    vio = (sensors or {}).get("vio_odom")
+    vio_o = (vio or {}).get("orientation") or {}
+    vio_valid = sum(v ** 2 for v in vio_o.values()) > 0.5
+
+    # IMU: available if angular_velocity present
+    imu = (sensors or {}).get("imu")
+    imu_valid = bool(imu and imu.get("angular_velocity"))
+
+    deadline = time.time() + target_rad / ROT_SPEED * 4.0 + 2.0
+    accumulated = 0.0
+
+    if vio_valid:
+        prev_yaw = _yaw_from_quat(vio_o)
+        _set_vel(0.0, 0.0, speed, 30.0)
+        ros.publish_twist(0.0, 0.0, speed)
+        while time.time() < deadline:
+            time.sleep(0.04)
+            vio = (ros.get_sensors() or {}).get("vio_odom")
+            if not vio or not vio.get("orientation"):
+                continue
+            cur_yaw = _yaw_from_quat(vio["orientation"])
+            delta = _angle_delta(prev_yaw, cur_yaw)
+            prev_yaw = cur_yaw
+            if angular_z_sign > 0 and delta > 0:
+                accumulated += delta
+            elif angular_z_sign < 0 and delta < 0:
+                accumulated += abs(delta)
+            if accumulated >= target_rad * 0.95:
+                break
+        mode = "vio"
+
+    elif imu_valid:
+        # Integrate IMU angular_velocity.z — works regardless of VIO state
+        _set_vel(0.0, 0.0, speed, 30.0)
+        ros.publish_twist(0.0, 0.0, speed)
+        prev_t = time.time()
+        while time.time() < deadline:
+            time.sleep(0.04)
+            cur_t = time.time()
+            dt = cur_t - prev_t
+            prev_t = cur_t
+            imu = (ros.get_sensors() or {}).get("imu")
+            if not imu:
+                continue
+            omega_z = abs(imu["angular_velocity"]["z"])
+            if omega_z > 0.05:  # noise floor at rest ≈ 0.003 rad/s
+                accumulated += omega_z * dt
+            if accumulated >= target_rad * 0.95:
+                break
+        mode = "imu"
+
+    else:
+        # Timed fallback
+        duration_s = target_rad / ROT_SPEED
+        _set_vel(0.0, 0.0, speed, duration_s)
+        ros.publish_twist(0.0, 0.0, speed)
+        time.sleep(duration_s + 0.2)
+        accumulated = target_rad
+        mode = "timed"
+
+    _set_vel(0.0, 0.0, 0.0, 0.0)
+    ros.publish_twist(0.0, 0.0, 0.0)
+    return {"achieved_deg": round(math.degrees(accumulated), 1), "ok": True, "mode": mode}
+
+
+def _tool_turn_left(degrees: float = 45) -> dict:
+    degrees = max(0.0, min(180.0, float(degrees)))
+    angle_rad = math.radians(degrees)
+    # Try algo_roll first — uses firmware's all-wheel rotation service.
+    # Standard ROS convention: positive angle = CCW = left.
+    result = ros.algo_roll(angle_rad, speed_rad_s=1.0, timeout_s=max(10, int(angle_rad / 0.5 + 5)), error_rad=0.05)
+    if result.get("ok"):
+        return {"degrees": degrees, "ok": True, "mode": "algo_roll"}
+    # Fallback: IMU closed-loop via cmd_vel
+    fb = _rotate_closed_loop(-1.0, angle_rad)
+    return {"degrees": degrees, **fb}
+
+
+def _tool_turn_right(degrees: float = 45) -> dict:
+    degrees = max(0.0, min(180.0, float(degrees)))
+    angle_rad = math.radians(degrees)
+    # Negative angle = CW = right in standard ROS convention.
+    result = ros.algo_roll(-angle_rad, speed_rad_s=1.0, timeout_s=max(10, int(angle_rad / 0.5 + 5)), error_rad=0.05)
+    if result.get("ok"):
+        return {"degrees": degrees, "ok": True, "mode": "algo_roll"}
+    fb = _rotate_closed_loop(+1.0, angle_rad)
+    return {"degrees": degrees, **fb}
 
 
 def _tool_look_around(n: int = 8) -> dict:
@@ -597,8 +736,12 @@ def _tool_capture_and_describe(question: str) -> dict:
 
 _TOOL_DISPATCH = {
     "stop":                 _tool_stop,
-    "move":                 _tool_move,
-    "rotate":               _tool_rotate,
+    "move_forward":         _tool_move_forward,
+    "move_backward":        _tool_move_backward,
+    "strafe_left":          _tool_strafe_left,
+    "strafe_right":         _tool_strafe_right,
+    "turn_left":            _tool_turn_left,
+    "turn_right":           _tool_turn_right,
     "look_around":          _tool_look_around,
     "describe_scene":       _tool_describe_scene,
     "list_objects":         _tool_list_objects,
@@ -639,75 +782,89 @@ def agent_chat(req: ChatReq):
 
     messages: list = [{"role": "system", "content": sys_content}]
     messages.extend(history[-10:])
-    messages.append({"role": "user", "content": req.message})
+    # Append /no_think to disable Qwen3 extended-thinking mode, which can
+    # interfere with the tool-call parser when thinking tokens appear before
+    # the tool call JSON. Safe to append; ignored by non-Qwen models.
+    user_content = req.message + " /no_think" if _AGENT_PROVIDER == "mlx" else req.message
+    messages.append({"role": "user", "content": user_content})
 
     chat_url, chat_model, chat_headers = _provider_config()
     print(f"[agent] provider={_AGENT_PROVIDER} model={chat_model}", flush=True)
 
-    tool_log: list = []
-    reply = ""
-    for _ in range(4):
-        try:
-            resp = requests.post(
-                chat_url,
-                headers=chat_headers,
-                json={
-                    "model":       chat_model,
-                    "messages":    messages,
-                    "tools":       _TOOLS,
-                    "tool_choice": "auto",
-                    "temperature": 0.65,
-                    "stream":      False,
-                },
-                timeout=60,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-        except Exception as exc:
-            reply = f"[noir] unreachable: {exc}"
-            break
+    def _stream():
+        reply = ""
+        replied = False
 
-        msg   = (data.get("choices") or [{}])[0].get("message", {})
-        calls = msg.get("tool_calls") or []
-
-        if not calls:
-            reply = (msg.get("content") or "").strip()
-            print(f"[agent] reply: {reply!r}", flush=True)
-            messages.append({"role": "assistant", "content": reply})
-            break
-
-        messages.append({
-            "role":       "assistant",
-            "content":    msg.get("content") or "",
-            "tool_calls": calls,
-        })
-        for c in calls:
-            fn    = (c.get("function") or {}).get("name", "")
-            tc_id = c.get("id", "")
-            args  = (c.get("function") or {}).get("arguments") or {}
-            if isinstance(args, str):
-                try:
-                    args = json.loads(args)
-                except Exception:
-                    args = {}
+        for _ in range(4):
             try:
-                result = _TOOL_DISPATCH[fn](**args) if fn in _TOOL_DISPATCH else {"error": f"unknown_tool:{fn}"}
+                resp = requests.post(
+                    chat_url,
+                    headers=chat_headers,
+                    json={
+                        "model":       chat_model,
+                        "messages":    messages,
+                        "tools":       _TOOLS,
+                        "temperature": 0.0,
+                        "stream":      False,
+                    },
+                    timeout=60,
+                )
+                resp.raise_for_status()
+                data = resp.json()
             except Exception as exc:
-                result = {"error": str(exc)}
-            tool_log.append({"name": fn, "args": args, "result": result})
-            messages.append({
-                "role":         "tool",
-                "tool_call_id": tc_id,
-                "content":      json.dumps(result)[:1500],
-            })
-    else:
-        if not reply:
-            reply = "[noir] hit iteration limit — try again"
+                reply = f"[noir] unreachable: {exc}"
+                yield f"data: {json.dumps({'type': 'reply', 'text': reply})}\n\n"
+                replied = True
+                break
 
-    history.append({"role": "user",      "content": req.message})
-    history.append({"role": "assistant", "content": reply or "…"})
-    r.set("agent:history", json.dumps(history[-20:]), ex=1800)
-    return {"reply": reply, "tool_calls": tool_log}
+            msg   = (data.get("choices") or [{}])[0].get("message", {})
+            calls = msg.get("tool_calls") or []
+
+            if not calls:
+                reply = (msg.get("content") or "").strip()
+                # Log finish_reason so you can tell if the model tried tool use
+                finish = (data.get("choices") or [{}])[0].get("finish_reason", "?")
+                print(f"[agent] reply ({finish}): {reply!r}", flush=True)
+                messages.append({"role": "assistant", "content": reply})
+                yield f"data: {json.dumps({'type': 'reply', 'text': reply})}\n\n"
+                replied = True
+                break
+
+            messages.append({
+                "role":       "assistant",
+                "content":    msg.get("content") or "",
+                "tool_calls": calls,
+            })
+            for c in calls:
+                fn    = (c.get("function") or {}).get("name", "")
+                tc_id = c.get("id", "")
+                args  = (c.get("function") or {}).get("arguments") or {}
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args)
+                    except Exception:
+                        args = {}
+                try:
+                    result = _TOOL_DISPATCH[fn](**args) if fn in _TOOL_DISPATCH else {"error": f"unknown_tool:{fn}"}
+                except Exception as exc:
+                    result = {"error": str(exc)}
+                print(f"[agent] tool: {fn} → {result}", flush=True)
+                yield f"data: {json.dumps({'type': 'tool_call', 'name': fn, 'args': args, 'result': result})}\n\n"
+                messages.append({
+                    "role":         "tool",
+                    "tool_call_id": tc_id,
+                    "content":      json.dumps(result)[:1500],
+                })
+
+        if not replied:
+            reply = "[noir] hit iteration limit — try again"
+            yield f"data: {json.dumps({'type': 'reply', 'text': reply})}\n\n"
+
+        history.append({"role": "user",      "content": req.message})
+        history.append({"role": "assistant", "content": reply or "…"})
+        r.set("agent:history", json.dumps(history[-20:]), ex=1800)
+
+    return StreamingResponse(_stream(), media_type="text/event-stream")
 
 
 @app.post("/agent/reset")
@@ -730,11 +887,17 @@ def agent_follow_status():
 _FOLLOW_HZ       = 5
 _FOLLOW_K_YAW    = 1.6
 _FOLLOW_K_FWD    = 1.4
-_FOLLOW_TARGET_H = 0.30   # target bbox height as fraction of frame
+_FOLLOW_TARGET_H = 0.20   # target face bbox height as fraction of frame (~100px in 480p)
 _FOLLOW_STALE_S  = 2.5    # give up if face:latest is older than this
+_SEARCH_ROT_SPEED     = 1.5    # rad/s during search sweep (Scout: positive = CW = right)
+_SEARCH_ROT_TICKS     = 3      # ticks to rotate  (3 × 200 ms = 0.6 s ≈ ~28°)
+_SEARCH_PAUSE_TICKS   = 2      # ticks to pause   (2 × 200 ms = 0.4 s)
+
+_search_tick = 0   # counts ticks while face is lost; reset when face found
 
 
 def _follow_loop():
+    global _search_tick
     dt = 1.0 / _FOLLOW_HZ
     while True:
         time.sleep(dt)
@@ -742,6 +905,7 @@ def _follow_loop():
             r = _redis()
             cfg_raw = r.get("agent:follow_cfg")
             if not cfg_raw:
+                _search_tick = 0
                 continue
 
             # Yield to controller: if a stick moved in the last 1.5 s, step aside
@@ -753,37 +917,47 @@ def _follow_loop():
             target = cfg.get("target", "")
 
             face_raw = r.get("face:latest")
-            if not face_raw:
-                _set_vel(0.0, 0.0, 0.0, 0.0)
-                continue
-
-            fd = json.loads(face_raw)
-            if (_now() - float(fd.get("ts", 0))) > _FOLLOW_STALE_S:
-                _set_vel(0.0, 0.0, 0.0, 0.0)
-                continue
+            fd = json.loads(face_raw) if face_raw else {}
+            stale = (_now() - float(fd.get("ts", 0))) > _FOLLOW_STALE_S if fd else True
 
             faces = fd.get("faces") or []
             pick  = next((f for f in faces if f.get("name") == target), None) if target \
                     else (faces[0] if faces else None)
-            if not pick:
-                _set_vel(0.0, 0.0, 0.0, 0.0)
+
+            if not pick or stale:
+                # ── Search pattern: rotate-pause-rotate-pause ──────────────
+                _search_tick += 1
+                cycle = _SEARCH_ROT_TICKS + _SEARCH_PAUSE_TICKS
+                phase = _search_tick % cycle
+                if phase < _SEARCH_ROT_TICKS:
+                    hold_s = dt + 0.1
+                    _set_vel(0.0, 0.0, _SEARCH_ROT_SPEED, hold_s)
+                    ros.publish_twist(0.0, 0.0, _SEARCH_ROT_SPEED)
+                else:
+                    _set_vel(0.0, 0.0, 0.0, 0.0)
                 continue
+
+            # Face found — reset search state
+            _search_tick = 0
 
             x1, y1, x2, y2 = pick["bbox"]
             fw = float(fd.get("frame_w") or 1)
             fh = float(fd.get("frame_h") or 1)
 
             cx      = (x1 + x2) / 2.0
-            err_x   = (cx - fw / 2.0) / (fw / 2.0)                          # -1..1, +ve = right
+            err_x   = (cx - fw / 2.0) / (fw / 2.0)        # -1..1, +ve = right of center
             box_h_f = (y2 - y1) / fh
-            yaw_cmd = max(-1.5, min(1.5, _FOLLOW_K_YAW * err_x))
+            # Negate err_x: Scout positive angular.z = CW (right), but face-right means
+            # rotate right which needs positive — EXCEPT camera image may need flip.
+            # Empirically confirmed: negate to correct direction.
+            yaw_cmd = max(-1.5, min(1.5, -_FOLLOW_K_YAW * err_x))
             fwd_cmd = max(-0.4, min(0.4, _FOLLOW_K_FWD * (_FOLLOW_TARGET_H - box_h_f)))
 
             ok, _ = arbiter_allow(0.0, fwd_cmd, yaw_cmd)
             if not ok:
                 continue
 
-            hold_s = dt + 0.1   # slightly longer than loop period → no gap between pulses
+            hold_s = dt + 0.1
             _set_vel(0.0, fwd_cmd, yaw_cmd, hold_s)
             ros.publish_twist(0.0, fwd_cmd, yaw_cmd)
             _record_allowed_move()
