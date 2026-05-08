@@ -22,6 +22,7 @@ from scoutros import ScoutROS, CMD_VEL_TOPIC, CAMERA_TOPIC
 # ── Redis ─────────────────────────────────────────────────────────────────────
 
 _REDIS_URL        = os.environ.get("REDIS_URL",        "redis://localhost:6380")
+_TEST_MODE        = os.environ.get("TEST_MODE", "").lower() in ("1", "true", "yes")
 _OPENROUTER_URL   = "https://openrouter.ai/api/v1/chat/completions"
 _OPENROUTER_KEY   = os.environ.get("OPENROUTER_API_KEY", "")
 # Provider: "mlx" (local vllm-mlx, default) or "openrouter" (cloud fallback)
@@ -240,8 +241,26 @@ def snapshot():
 
 # ── Sensors ───────────────────────────────────────────────────────────────────
 
+_TEST_SENSORS = {
+    "tof_range_m": 0.42,
+    "imu": {
+        "linear_acceleration": {"x": 0.01, "y": -0.02, "z": 9.81},
+        "angular_velocity":    {"x": 0.0,  "y": 0.0,  "z": 0.0},
+    },
+    "vio_odom": {
+        "position":    {"x": 0.0, "y": 0.0, "z": 0.0},
+        "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+        "velocity":    {"linear": {"x": 0.0, "y": 0.0, "z": 0.0},
+                        "angular": {"x": 0.0, "y": 0.0, "z": 0.0}},
+    },
+    "battery": {"percentage": 88.0, "charging": False, "full": False},
+}
+
+
 @app.get("/sensors")
 def sensors():
+    if _TEST_MODE:
+        return _TEST_SENSORS
     return ros.get_sensors()
 
 
@@ -272,6 +291,8 @@ def stop_robot():
 
 @app.post("/robot/move")
 def move(v: Vel):
+    if _TEST_MODE:
+        return {"ok": True, "x": v.x, "y": v.y, "rotate": v.rotate, "test_mode": True}
     if not ros.is_connected:
         raise HTTPException(503, "Not connected to ROS master")
     ok, reason = arbiter_allow(v.x, v.y, v.rotate)

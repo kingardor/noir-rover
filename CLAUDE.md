@@ -29,12 +29,30 @@ make build-bridge    # requires micromamba + ros_env (RoboStack)
 # Create / update noir_env conda environment (vision, facerec, controller deps)
 make sync            # micromamba env update -f environment.yml
 
-# Full stack with live UI
+# Full stack with live UI (robot must be on)
 tilt up
 
 # Fallback: plain bash (no Tilt UI)
 make dev             # or: bash scripts/dev.sh
 ```
+
+## Test mode (no robot required)
+
+Set `TEST_MODE=1` in your `.env` file (gitignored), then enable the `test-feed` resource:
+
+```bash
+# .env
+TEST_MODE=1
+```
+
+```bash
+tilt up          # bridge starts with TEST_MODE=1; motion cmds are no-ops, sensors return synthetic values
+# In Tilt UI, enable the 'test-feed' resource (it is auto_init=False by default)
+```
+
+`test-feed` (`vision/test_feed.py`) writes synthetic 640×384 JPEG frames to `camera:frame` at 5 fps,
+letting the full vision pipeline — YOLOE, VLM, face-rec, kg_builder — run against fake frames.
+It yields automatically to real bridge frames if the robot comes on mid-session.
 
 ## Network topology
 

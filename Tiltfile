@@ -2,8 +2,15 @@
 # Usage: tilt up
 #
 # Labels:
-#   infra  — Docker-based services (Redis)
-#   native — macOS-native services (bridge, vision, controller)
+#   infra     — Docker-based services (Redis)
+#   native    — macOS-native services (bridge, vision, controller)
+#   test-mode — synthetic camera feed for offline development (no robot needed)
+#
+# Test mode (no robot required):
+#   tilt up test-feed bridge vision vlm kg dashboard audio
+#   The bridge starts with TEST_MODE=1: sensors return synthetic values,
+#   move commands are no-ops. test-feed writes synthetic camera frames to Redis
+#   so the vision pipeline (YOLOE, VLM, KG builder) runs normally.
 
 # ── Docker Compose (infra) ────────────────────────────────────────────────────
 docker_compose('docker-compose.yml')
@@ -31,8 +38,21 @@ local_resource(
     labels=['ready-check'],
 )
 
+# Synthetic camera feed — writes test frames to Redis so the full vision/KG
+# pipeline can run without the Scout robot. Automatically yields to real bridge
+# frames when the robot is on. Start before other services in test mode.
+local_resource(
+    'test-feed',
+    serve_cmd='REDIS_URL=redis://localhost:6380 TEST_FPS=5 /opt/homebrew/opt/micromamba/bin/micromamba run -n noir_env python -u vision/test_feed.py',
+    deps=['vision/test_feed.py'],
+    labels=['test-mode'],
+    resource_deps=['noir-redis-proxy'],
+    auto_init=False,   # off by default — enable manually when robot is not connected
+)
+
 # Bridge runs natively so ROS XMLRPC/TCPROS bind on Mac's real IP (10.42.0.181),
 # directly reachable from the robot — no socat proxies needed.
+# Set TEST_MODE=1 (via .env or inline) to run without the robot.
 local_resource(
     'bridge',
     serve_cmd='set -a; [ -f .env ] && . .env; set +a; ROS_MASTER_URI=http://10.42.0.1:11311 ROS_IP=10.42.0.181 REDIS_URL=redis://localhost:6380 AGENT_PROVIDER=mlx MLX_VLM_URL=http://localhost:8000 AGENT_MODEL=mlx-community/Qwen3-VL-2B-Instruct-4bit bash scripts/start_bridge.sh',
