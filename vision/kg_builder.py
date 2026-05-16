@@ -48,23 +48,25 @@ DEDUP_WINDOW_S = 300  # skip event if same description was inserted within 5 min
 # ── VLM prompt ─────────────────────────────────────────────────────────────────
 
 _PROMPT_TMPL = """\
-You are a robot's perception system. Analyze this image.
+You are a robot's perception system. Study this image carefully and identify everything you can see.
 
 Things already in my knowledge graph: [{known}]
 
 Return ONLY valid JSON — no markdown, no prose, no code fences:
 
 {{
-  "caption": "One clear sentence describing the current scene",
-  "new_objects": [{{"label": "...", "attrs": {{"color": "..."}}}}],
+  "caption": "One clear sentence describing the overall scene",
+  "new_objects": [{{"label": "...", "attrs": {{"color": "...", "material": "..."}}}}],
   "new_events":  [{{"description": "...", "involves": ["label1", "label2"]}}],
   "changes":     [{{"label": "...", "change": "moved|appeared|disappeared"}}]
 }}
 
-new_objects: objects clearly visible that are NOT in my knowledge graph.
-new_events: notable situations or activities (person entering, object being used, etc.).
-changes: things I already know about that have visibly changed state.
-Use empty arrays if nothing is new. Always include caption. /no_think"""
+new_objects: List ALL distinct things visible that are NOT already in my knowledge graph.
+  Include: furniture, bags, food, drinks, electronics, clothing, decorations, containers, signs, people.
+  Use short labels (2-3 words max). Be thorough — if you see 10 things, list all 10.
+new_events: Notable activities or situations (person doing something, object being used, etc.).
+changes: Things I already know about that have visibly moved or changed state.
+Use empty arrays only if truly nothing applies. Always include caption. /no_think"""
 
 
 def _build_prompt(known_labels: set) -> str:

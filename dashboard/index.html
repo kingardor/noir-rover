@@ -828,6 +828,17 @@
       transition: border-color 150ms;
     }
     .kg-thumb:hover { border-color: rgba(0,212,255,.7); }
+    #kg-lightbox {
+      display: none; position: fixed; inset: 0; z-index: 9999;
+      background: rgba(0,0,0,.88); align-items: center; justify-content: center;
+      cursor: zoom-out;
+    }
+    #kg-lightbox.open { display: flex; }
+    #kg-lightbox img {
+      max-width: 90vw; max-height: 88vh;
+      border: 1px solid var(--border-hi);
+      box-shadow: 0 0 60px rgba(0,212,255,.15);
+    }
     .kg-diary-card { flex-shrink: 0; max-height: 240px; overflow: hidden; display: flex; flex-direction: column; }
     .kg-diary-body { padding: 8px 12px; font-size: 11px; color: var(--fg); line-height: 1.5; overflow-y: auto; flex: 1; font-style: italic; }
     .diary-date-input {
@@ -1940,9 +1951,10 @@ async function showKGNodeDetail(nodeId) {
   if (d.images && d.images.length) {
     html += `<div class="s-lbl" style="margin-bottom:6px">IMAGES (${d.images.length})</div>`;
     html += `<div class="kg-images">` +
-      d.images.slice(0, 6).map(img =>
-        `<img src="${API}/kg/image/${img.id}" class="kg-thumb" alt="${d.label}" loading="lazy">`
-      ).join('') +
+      d.images.slice(0, 6).map(img => {
+        const src = `${API}/kg/image/${img.id}`;
+        return `<img src="${src}" class="kg-thumb" alt="${d.label}" loading="lazy" onclick="openLightbox('${src}')">`;
+      }).join('') +
     `</div>`;
   } else {
     html += `<div style="color:var(--fg-dim);font-size:10px;margin-top:6px;">no images attached</div>`;
@@ -2025,6 +2037,16 @@ setInterval(pollFaces, 500);
 setInterval(pollKG, 2000);
 pollVLM();
 pollFaces();
+
+function openLightbox(src) {
+  const lb = document.getElementById('kg-lightbox');
+  document.getElementById('kg-lightbox-img').src = src;
+  lb.classList.add('open');
+}
+document.getElementById('kg-lightbox').addEventListener('click', () => {
+  document.getElementById('kg-lightbox').classList.remove('open');
+});
 </script>
+<div id="kg-lightbox"><img id="kg-lightbox-img" src="" alt=""></div>
 </body>
 </html>
