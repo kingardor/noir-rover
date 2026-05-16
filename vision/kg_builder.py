@@ -57,7 +57,7 @@ Return ONLY valid JSON — no markdown, no prose, no code fences:
 {{
   "caption": "One clear sentence describing the current scene",
   "new_objects": [{{"label": "...", "attrs": {{"color": "..."}}}}],
-  "new_events":  [{{"description": "..."}}],
+  "new_events":  [{{"description": "...", "involves": ["label1", "label2"]}}],
   "changes":     [{{"label": "...", "change": "moved|appeared|disappeared"}}]
 }}
 
