@@ -255,8 +255,18 @@ def main():
 
         print(f"[kg]   objects={len(new_objects)} events={len(new_events)} changes={len(changes)}", flush=True)
 
-        # Save image once — all new nodes this tick share it
-        img_id, img_path = store.save_image(b64)
+        # Image is saved lazily — only when the first node is actually inserted.
+        # All new nodes this tick share the same image file.
+        _img_id: list = []
+        _img_path: list = []
+
+        def _get_image():
+            if not _img_id:
+                iid, ipath = store.save_image(b64)
+                _img_id.append(iid)
+                _img_path.append(ipath)
+            return _img_id[0], _img_path[0]
+
         added = 0
 
         # ── Insert new objects ─────────────────────────────────────────────────
@@ -264,6 +274,7 @@ def main():
             label, attrs = _obj_label(item)
             if not label or label in known_labels:
                 continue
+            img_id, img_path = _get_image()
             store.add_object(label, attrs, img_id, img_path, now)
             print(f"[kg]   + object: {label}", flush=True)
             added += 1
@@ -274,6 +285,7 @@ def main():
             desc, involves = _evt_desc(item)
             if not desc or not _is_event_new(desc, now):
                 continue
+            img_id, img_path = _get_image()
             store.add_event(desc, involves, img_id, img_path, now)
             _record_event(desc, now)
             print(f"[kg]   + event: {desc}", flush=True)
@@ -295,6 +307,7 @@ def main():
                 for face in face_data.get("faces") or []:
                     name = face.get("name", "").strip()
                     if name and name.lower() != "unknown":
+                        img_id, img_path = _get_image()
                         store.add_person(name.lower(), img_id, img_path, now)
                         print(f"[kg]   + person: {name}", flush=True)
                         changed = True
