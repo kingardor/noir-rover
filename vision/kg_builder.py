@@ -157,10 +157,27 @@ def _record_event(desc: str, now: float):
 
 # ── VLM item coercion (handle str or dict from VLM) ───────────────────────────
 
+_ARTICLES = ("a ", "an ", "the ")
+_MAX_LABEL_WORDS = 4  # reject sentence-length strings landing in object slots
+
+
+def _normalize_label(raw: str) -> str:
+    """Strip leading articles and reject multi-word sentences."""
+    s = raw.strip().lower()
+    for art in _ARTICLES:
+        if s.startswith(art):
+            s = s[len(art):]
+            break
+    if len(s.split()) > _MAX_LABEL_WORDS:
+        return ""   # too long to be an object label — caller will skip
+    return s
+
+
 def _obj_label(item):
     if isinstance(item, str):
-        return item.strip().lower(), {}
-    return (item.get("label") or "").strip().lower(), (item.get("attrs") or {})
+        return _normalize_label(item), {}
+    raw = (item.get("label") or "").strip()
+    return _normalize_label(raw), (item.get("attrs") or {})
 
 
 def _evt_desc(item):
@@ -172,8 +189,8 @@ def _evt_desc(item):
 
 def _chg_label(item):
     if isinstance(item, str):
-        return item.strip().lower(), "changed"
-    return (item.get("label") or "").strip().lower(), (item.get("change") or "changed")
+        return _normalize_label(item), "changed"
+    return _normalize_label((item.get("label") or "").strip()), (item.get("change") or "changed")
 
 
 # ── Main loop ──────────────────────────────────────────────────────────────────
