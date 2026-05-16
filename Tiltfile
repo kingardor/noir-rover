@@ -7,7 +7,7 @@
 #   test-mode — synthetic camera feed for offline development (no robot needed)
 #
 # Test mode (no robot required):
-#   tilt up test-feed bridge vision vlm kg dashboard audio
+#   tilt up test-feed bridge vision kg dashboard audio
 #   The bridge starts with TEST_MODE=1: sensors return synthetic values,
 #   move commands are no-ops. test-feed writes synthetic camera frames to Redis
 #   so the vision pipeline (YOLOE, VLM, KG builder) runs normally.
@@ -20,10 +20,10 @@ dc_resource('noir-redis-proxy',  labels=['infra'], resource_deps=['noir-redis'])
 
 # ── Native macOS services ─────────────────────────────────────────────────────
 
-# mlx-vlm server — Qwen3-VL-2B on :8000 (text + vision + tool calling).
+# mlx-vlm server — Qwen3-VL-2B on :8000 (text + vision).
 # vllm-mlx was tried but crashes on Qwen3-VL (GPU stream thread issue in worker pool).
 # mlx_vlm.server runs inference in the main thread and works correctly.
-# To switch to OpenRouter instead: set AGENT_PROVIDER=openrouter in the bridge serve_cmd.
+# To switch to OpenRouter for agent chat: set AGENT_PROVIDER=openrouter in the bridge serve_cmd.
 local_resource(
     'vlm-server',
     serve_cmd='/opt/homebrew/opt/micromamba/bin/micromamba run -n noir_env python -m mlx_vlm.server --model mlx-community/Qwen3-VL-2B-Instruct-4bit --port 8000',
@@ -77,13 +77,6 @@ local_resource(
     resource_deps=['bridge-ready'],
 )
 
-local_resource(
-    'vlm',
-    serve_cmd='REDIS_URL=redis://localhost:6380 MLX_VLM_URL=http://localhost:8000 VLM_MODEL=mlx-community/Qwen3-VL-2B-Instruct-4bit VLM_INTERVAL=5.0 /opt/homebrew/opt/micromamba/bin/micromamba run -n noir_env python -u vision/vlm.py',
-    deps=['vision/vlm.py'],
-    labels=['native'],
-    resource_deps=['bridge-ready', 'vlm-server-ready'],
-)
 
 # Audio sidecar — Parakeet STT + Kokoro TTS on :8014
 local_resource(
@@ -110,9 +103,11 @@ local_resource(
     resource_deps=['bridge-ready'],
 )
 
+# kg — combined perception service: caption (→ vlm:latest) + knowledge graph (→ Kuzu).
+# Replaces the old separate vlm.py and kg_builder.py services.
 local_resource(
     'kg',
-    serve_cmd='REDIS_URL=redis://localhost:6380 MLX_VLM_URL=http://localhost:8000 VLM_MODEL=mlx-community/Qwen3-VL-2B-Instruct-4bit /opt/homebrew/opt/micromamba/bin/micromamba run -n noir_env python -u vision/kg_builder.py',
+    serve_cmd='REDIS_URL=redis://localhost:6380 MLX_VLM_URL=http://localhost:8000 VLM_MODEL=mlx-community/Qwen3-VL-2B-Instruct-4bit KG_INTERVAL=10.0 /opt/homebrew/opt/micromamba/bin/micromamba run -n noir_env python -u vision/kg_builder.py',
     deps=['vision/kg_builder.py', 'vision/kg_store.py'],
     labels=['native'],
     resource_deps=['bridge-ready', 'vlm-server-ready'],

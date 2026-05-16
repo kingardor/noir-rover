@@ -2,17 +2,6 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Agent tool design — non-negotiable rule
-
-**Tool descriptions must be self-advertising. Never hardcode tool-selection logic in the system prompt.**
-
-The system prompt sets personality and general behavior. Each tool's `description` field is what tells the LLM what the tool does and when to use it. The model reasons about which tool to use based on those descriptions — that reasoning must not be pre-empted by decision tables, `if user says X call tool Y` rules, or hardcoded examples in the system prompt.
-
-Wrong: putting `"- 'turn left' → move(rotate_deg=...)"` in the system prompt.  
-Right: the `move` tool description says it handles rotation, with sign conventions explained in the parameter descriptions.
-
-This applies to any agent or tool-using LLM in this codebase.
-
 ## What this project is
 
 Noir-rover is an autonomous AI rover system built on a **Moorebot Scout** omnidirectional robot. It combines:
@@ -84,9 +73,8 @@ MacBook Air M4 (all native)             Docker VM (Linux containers)
 │   (RoboStack ROS Noetic) │            │ noir-redis        host mode │
 │                          │            └────────────────────────────┘
 │ vision/app.py  (YOLOE)   │
-│ vision/vlm.py  (VLM)     │
+│ vision/kg_builder.py     │  ← caption + Kuzu KG at data/kg/graph_db/
 │ vision/facerec.py        │
-│ vision/kg_builder.py     │  ← Kuzu KG at data/kg/graph_db/
 │ controllers/driver.py    │
 └──────────┬───────────────┘
            │  ROS TCP (direct — no proxy)
@@ -109,15 +97,14 @@ The `catkin_ws/` directory is gitignored. `make build-bridge` creates it from `r
 
 ### Bridge (ros-noetic/) — runs natively via RoboStack micromamba
 - **`scoutros.py`** — Only ROS-touching code. Publishes Twist on `/cmd_vel`; subscribes to camera, ToF, IMU, VIO, battery. Service wrappers for `algo_action`, `algo_move`, `algo_roll`, nav.
-- **`bridge-api.py`** — FastAPI bridge (v4). Magnitude-clamp safety arbiter, all endpoints. Uses Redis for vision state and Xbox activity tracking. Runs on port 8012.
+- **`bridge-api.py`** — FastAPI bridge (v5). Magnitude-clamp safety arbiter, all endpoints. Plain conversational agent chat (no tool calling). Uses Redis for vision state and Xbox activity tracking. Runs on port 8012.
 
 ### Native macOS (Python 3.11+)
 - **`vision/app.py`** — YOLOE on MPS. Publishes `vision:latest` JSON and `vision:thumb:{id}` to Redis. Runs `vision/memory.py` as thread.
 - **`vision/memory.py`** — Debounced detection writer to `memory:events` Redis stream.
-- **`vision/vlm.py`** — VLM scene description. Polls `vision:latest` every 5s, calls Qwen3-VL-2B-4bit via `mlx_vlm.server` at `:8000` (OpenAI-compat), stores result in `vlm:latest` (TTL 30s). Set `VLM_MODEL` env to override model.
-- **`vision/facerec.py`** — Face recognition using InsightFace (`buffalo_l`). Polls `vision:latest`, detects + identifies faces against enrolled images in `faces/`, publishes to `face:latest` (TTL 10s). Enrolled images: `faces/<Name>.jpg`. Threshold: 0.35 cosine similarity.
-- **`vision/kg_builder.py`** — Knowledge graph builder. Subscribes to `vision:events` pubsub; on each event checks YOLOE labels against the KG and triggers Qwen3-VL only when a novel label appears or the 30 s cooldown expires. Writes Object/Event/Person nodes to Kuzu, saves JPEG per tick to `data/kg/images/`, publishes `kg:snapshot` (full graph JSON, TTL 300 s) and `kg:updated` pubsub after each change. Handles `kg:reset` signal from bridge. Runs in **noir_env** (kuzu is only installed there).
+- **`vision/kg_builder.py`** — Combined perception service. Runs on a timer (`KG_INTERVAL`, default 10 s). Each tick: calls Qwen3-VL-2B-4bit via `mlx_vlm.server` at `:8000` with a combined prompt that returns a scene caption plus structured KG updates (`new_objects`, `new_events`, `changes`). Writes caption to `vlm:latest` (TTL 30 s). Writes Object/Event/Person nodes to Kuzu with event deduplication (5 min window). Saves JPEG per tick to `data/kg/images/`. Publishes `kg:snapshot` (full graph JSON, TTL 300 s) after any change. Handles `kg:reset` signal from bridge. Auto-links named faces from `face:latest`. Runs in **noir_env** (kuzu is only installed there).
 - **`vision/kg_store.py`** — Thin Kuzu wrapper. Schema: Object, Event, Person, Image, Diary node tables; INVOLVES, WITNESSED_BY, NEAR, PICTURED_IN, CAPTURED_AT, APPEARS_IN rel tables. Key methods: `add_object`, `add_event`, `add_person`, `touch_label`, `save_image`, `existing_labels`, `query_by_label`, `graph_snapshot`, `get_node_images`. Run `python vision/kg_store.py --self-test` for a CRUD round-trip.
+- **`vision/facerec.py`** — Face recognition using InsightFace (`buffalo_l`). Polls `vision:latest`, detects + identifies faces against enrolled images in `faces/`, publishes to `face:latest` (TTL 10s). Enrolled images: `faces/<Name>.jpg`. Threshold: 0.35 cosine similarity.
 - **`controllers/driver.py`** — Xbox / PS5 controller loop via GameController.framework at 60 Hz. Stamps `xbox:last_input_ts` in Redis on input.
 
 ## Bridge API endpoints (port 8012)
@@ -142,7 +129,11 @@ The `catkin_ws/` directory is gitignored. `make build-bridge` creates it from `r
 | `POST /nav/cancel` | Cancel navigation |
 | `GET /nav/status` | NavPathNode status code |
 | `POST /nav/path/save` | Save current path |
-| `GET /vlm/description` | Latest VLM scene description (TTL 30s) |
+| `POST /agent/chat` | Conversational chat with NOIR (plain, no tool calling) |
+| `POST /agent/reset` | Reset conversation history |
+| `POST /agent/follow` | Enable/disable face-following `{on, target_name}` |
+| `POST /vision/describe` | On-demand VLM answer for a visual question `{question}` |
+| `GET /vlm/description` | Latest scene caption from kg_builder (TTL 30s) |
 | `GET /faces/detections` | Latest face recognition results (TTL 10s) |
 | `GET /safety/state` | Controller activity + last move age |
 | `GET /memory/recent` | Latest N detection events from memory stream |
@@ -173,7 +164,7 @@ angular.z = rotation (+ = clockwise)
 | `vision:thumb:{frame_id}` | base64 JPEG | 60s | `vision/app.py` |
 | `vision:events` (pubsub) | channel | — | `vision/app.py` |
 | `memory:events` | Redis stream | — | `vision/memory.py` |
-| `vlm:latest` | JSON {text,ts,frame_id} | 30s | `vision/vlm.py` |
+| `vlm:latest` | JSON {text,ts,frame_id} | 30s | `vision/kg_builder.py` |
 | `face:latest` | JSON {faces,ts,frame_id,frame_w,frame_h} | 10s | `vision/facerec.py` |
 | `kg:snapshot` | JSON {nodes,edges,node_images,image_index,counts,ts} | 300s | `vision/kg_builder.py` |
 | `kg:updated` (pubsub) | channel | — | `vision/kg_builder.py` |

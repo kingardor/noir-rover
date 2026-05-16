@@ -1,20 +1,22 @@
 #!/usr/bin/env python3
 """
-Knowledge-graph builder — native macOS, noir_env.
+Perception service — caption + knowledge graph.
 
-Subscribes to the vision:events Redis pubsub (published by vision/app.py).
-On each event, checks whether YOLOE detected any labels not yet in the KG.
-If so (or after a 30-second cooldown), calls Qwen3-VL with a structured-JSON
-prompt to extract NEW or CHANGED objects/events in the scene.
+Runs on a timer (KG_INTERVAL seconds, default 10). Each tick:
+  1. Grabs the latest camera frame from Redis.
+  2. Calls Qwen3-VL with a combined prompt → caption + structured KG updates.
+  3. Writes caption to vlm:latest (TTL 30s) — schema: {text, ts, frame_id}.
+  4. Writes new nodes/edges to Kuzu with deduplication:
+       - Objects: upsert by label (kg_store handles it)
+       - Events:  skip if same description added within DEDUP_WINDOW_S seconds
+       - Changes: touch_label() to update last_seen
+  5. Publishes kg:snapshot to Redis after any graph change (TTL 300s).
+  6. Auto-links named faces from face:latest to Person nodes.
 
-Parsed output is written to the Kuzu KG and images are saved to data/kg/images/.
-Named faces from face:latest are auto-linked to Person nodes.
-
-Publishes kg:updated to Redis after each successful graph update.
+Reset: watches kg:reset Redis key, wipes graph when set.
 
 Usage:
-    REDIS_URL=redis://localhost:6380 BRIDGE_URL=http://localhost:8012 \\
-        python -u vision/kg_builder.py
+    REDIS_URL=redis://localhost:6380 python -u vision/kg_builder.py
 """
 import base64
 import io
@@ -33,41 +35,44 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).parent))
 from kg_store import KGStore
 
-# ── Config ────────────────────────────────────────────────────────────────────
+# ── Config ─────────────────────────────────────────────────────────────────────
 
 REDIS_URL   = os.getenv("REDIS_URL",   "redis://localhost:6380")
 MLX_VLM_URL = os.getenv("MLX_VLM_URL", "http://localhost:8000")
 VLM_MODEL   = os.getenv("VLM_MODEL",   "mlx-community/Qwen3-VL-2B-Instruct-4bit")
 VLM_SIZE    = int(os.getenv("VLM_SIZE", "384"))
+KG_INTERVAL = float(os.getenv("KG_INTERVAL", "10.0"))
 
-KG_COOLDOWN  = float(os.getenv("KG_COOLDOWN",  "30.0"))  # min seconds between VLM calls
-KG_MAX_IMGS  = int(os.getenv("KG_MAX_IMGS",    "5"))     # max images kept per node (not yet enforced)
-MIN_CONF     = 0.45
+DEDUP_WINDOW_S = 300  # skip event if same description was inserted within 5 min
 
-# ── VLM prompt ────────────────────────────────────────────────────────────────
+# ── VLM prompt ─────────────────────────────────────────────────────────────────
 
 _PROMPT_TMPL = """\
-You are observing a scene through a robot's camera.
-Things I already know about: [{known}]
+You are a robot's perception system. Analyze this image.
 
-Looking at this image: what is NEW or CHANGED compared to what I already know?
-Respond with ONLY valid JSON — no markdown, no prose, no code fences.
+Things already in my knowledge graph: [{known}]
+
+Return ONLY valid JSON — no markdown, no prose, no code fences:
 
 {{
-  "new_objects": [{{"label": "...", "attrs": {{"color": "..."}}}}, ...],
-  "new_events":  [{{"description": "...", "involves": ["label1", ...]}}],
+  "caption": "One clear sentence describing the current scene",
+  "new_objects": [{{"label": "...", "attrs": {{"color": "..."}}}}],
+  "new_events":  [{{"description": "..."}}],
   "changes":     [{{"label": "...", "change": "moved|appeared|disappeared"}}]
 }}
 
-If nothing is new or changed, return: {{"new_objects":[],"new_events":[],"changes":[]}} /no_think"""
+new_objects: objects clearly visible that are NOT in my knowledge graph.
+new_events: notable situations or activities (person entering, object being used, etc.).
+changes: things I already know about that have visibly changed state.
+Use empty arrays if nothing is new. Always include caption. /no_think"""
 
 
-def _build_prompt(known_labels: set[str]) -> str:
+def _build_prompt(known_labels: set) -> str:
     known = ", ".join(sorted(known_labels)[:40]) if known_labels else "nothing yet"
     return _PROMPT_TMPL.format(known=known)
 
 
-# ── Image helpers ─────────────────────────────────────────────────────────────
+# ── Image helpers ──────────────────────────────────────────────────────────────
 
 def _resize_b64(b64_jpeg: str, size: int) -> str:
     img = Image.open(io.BytesIO(base64.b64decode(b64_jpeg))).convert("RGB")
@@ -77,7 +82,7 @@ def _resize_b64(b64_jpeg: str, size: int) -> str:
     return base64.b64encode(buf.getvalue()).decode()
 
 
-def _call_vlm(b64_jpeg: str, prompt: str) -> dict | None:
+def _call_vlm(b64_jpeg: str, prompt: str):
     """Call Qwen3-VL and return parsed JSON dict, or None on failure."""
     try:
         b64 = _resize_b64(b64_jpeg, VLM_SIZE)
@@ -91,7 +96,7 @@ def _call_vlm(b64_jpeg: str, prompt: str) -> dict | None:
                     {"type": "text", "text": prompt},
                 ]}],
                 "temperature": 0.0,
-                "max_tokens": 400,
+                "max_tokens": 500,
                 "stream": False,
             },
             timeout=30,
@@ -100,25 +105,23 @@ def _call_vlm(b64_jpeg: str, prompt: str) -> dict | None:
         text = (resp.json().get("choices") or [{}])[0].get("message", {}).get("content", "").strip()
         if not text:
             return None
-        # Strip markdown code fences if present
         text = re.sub(r"^```(?:json)?\s*", "", text)
         text = re.sub(r"\s*```$", "", text)
-        text = text.strip()
-        return json.loads(text)
+        return json.loads(text.strip())
     except Exception as e:
         print(f"[kg] VLM call failed: {e}", flush=True)
         return None
 
 
-# ── Snapshot ─────────────────────────────────────────────────────────────────
+# ── Snapshot ───────────────────────────────────────────────────────────────────
 
-def _publish_snapshot(store, r: redis_lib.Redis, ts: float):
+def _publish_snapshot(store: KGStore, r: redis_lib.Redis, ts: float):
     """Serialize full KG to kg:snapshot for bridge-api.py (TTL 300s)."""
     try:
         snap = store.graph_snapshot()
         snap["ts"] = ts
         snap["counts"] = store.count_nodes()
-        node_images: dict = {}
+        node_images = {}
         for node in snap["nodes"]:
             imgs = store.get_node_images(node["id"])
             if imgs:
@@ -134,24 +137,57 @@ def _publish_snapshot(store, r: redis_lib.Redis, ts: float):
         print(f"[kg] snapshot publish failed: {e}", flush=True)
 
 
-# ── Main loop ─────────────────────────────────────────────────────────────────
+# ── Event dedup ────────────────────────────────────────────────────────────────
+
+_recent_events: dict = {}  # description → ts of last insert
+
+
+def _is_event_new(desc: str, now: float) -> bool:
+    last = _recent_events.get(desc)
+    return last is None or (now - last) >= DEDUP_WINDOW_S
+
+
+def _record_event(desc: str, now: float):
+    _recent_events[desc] = now
+    cutoff = now - DEDUP_WINDOW_S
+    for k in list(_recent_events):
+        if _recent_events[k] < cutoff:
+            del _recent_events[k]
+
+
+# ── VLM item coercion (handle str or dict from VLM) ───────────────────────────
+
+def _obj_label(item):
+    if isinstance(item, str):
+        return item.strip().lower(), {}
+    return (item.get("label") or "").strip().lower(), (item.get("attrs") or {})
+
+
+def _evt_desc(item):
+    if isinstance(item, str):
+        return item.strip().lower(), []
+    involves = [l.lower() for l in (item.get("involves") or [])]
+    return (item.get("description") or "").strip().lower(), involves
+
+
+def _chg_label(item):
+    if isinstance(item, str):
+        return item.strip().lower(), "changed"
+    return (item.get("label") or "").strip().lower(), (item.get("change") or "changed")
+
+
+# ── Main loop ──────────────────────────────────────────────────────────────────
 
 def main():
     r = redis_lib.from_url(REDIS_URL, decode_responses=True)
     store = KGStore()
 
-    print(f"[kg] Store ready. VLM={VLM_MODEL}  cooldown={KG_COOLDOWN}s", flush=True)
+    print(f"[kg] Store ready. VLM={VLM_MODEL}  interval={KG_INTERVAL}s", flush=True)
 
-    pubsub = r.pubsub()
-    pubsub.subscribe("vision:events")
+    last_cam_ts = None
 
-    last_vlm_ts: float = 0.0
-
-    for message in pubsub.listen():
-        if message["type"] != "message":
-            continue
-
-        now = time.time()
+    while True:
+        t0 = time.time()
 
         # Handle reset signal from bridge POST /kg/reset
         if r.get("kg:reset"):
@@ -161,94 +197,96 @@ def main():
             r.delete("kg:reset")
             r.delete("kg:snapshot")
             r.set("kg:last_update", "0", ex=3600)
+            _recent_events.clear()
             print("[kg] reset complete", flush=True)
+            time.sleep(KG_INTERVAL)
             continue
 
-        # Read latest YOLOE detections
-        raw_vis = r.get("vision:latest")
-        if not raw_vis:
-            continue
-        try:
-            vis = json.loads(raw_vis)
-        except Exception:
-            continue
+        # Wait up to KG_INTERVAL for a new camera frame
+        deadline = t0 + KG_INTERVAL
+        b64 = None
+        cam_ts = None
+        while time.time() < deadline:
+            ts = r.get("camera:ts")
+            if ts and ts != last_cam_ts:
+                frame = r.get("camera:frame")
+                if frame:
+                    b64 = frame
+                    cam_ts = ts
+                    break
+            time.sleep(0.1)
 
-        detected_labels = {
-            d["label"].lower() for d in vis.get("detections", [])
-            if d.get("conf", 0) >= MIN_CONF
-        }
-
-        known_labels = store.existing_labels()
-
-        novel_labels = detected_labels - known_labels
-        time_since   = now - last_vlm_ts
-
-        # Trigger VLM only on novelty OR cooldown expiry
-        should_trigger = bool(novel_labels) or time_since >= KG_COOLDOWN
-        if not should_trigger:
+        if b64 is None:
             continue
 
-        # Grab current camera frame
-        b64 = r.get("camera:frame")
-        if not b64:
-            continue
+        # Grab freshest frame before the VLM call
+        ts2 = r.get("camera:ts")
+        if ts2 and ts2 != cam_ts:
+            frame2 = r.get("camera:frame")
+            if frame2:
+                b64 = frame2
+                cam_ts = ts2
 
-        last_vlm_ts = now
+        last_cam_ts = cam_ts
+        now = time.time()
 
         # ── Call VLM ──────────────────────────────────────────────────────────
-        prompt   = _build_prompt(known_labels)
-        t0       = time.monotonic()
-        result   = _call_vlm(b64, prompt)
-        elapsed  = time.monotonic() - t0
+        known_labels = store.existing_labels()
+        prompt = _build_prompt(known_labels)
+        t_vlm = time.monotonic()
+        result = _call_vlm(b64, prompt)
+        elapsed = time.monotonic() - t_vlm
 
         if not result:
             continue
+
+        # ── Write caption → vlm:latest ─────────────────────────────────────────
+        caption = (result.get("caption") or "").strip()
+        if caption:
+            r.set("vlm:latest", json.dumps({"text": caption, "ts": now, "frame_id": cam_ts}), ex=30)
+            print(f"[kg] {elapsed:.1f}s  {caption[:90]}", flush=True)
 
         new_objects = result.get("new_objects") or []
         new_events  = result.get("new_events")  or []
         changes     = result.get("changes")     or []
 
         if not new_objects and not new_events and not changes:
-            print(f"[kg] {elapsed:.1f}s — nothing new.", flush=True)
             continue
 
-        print(f"[kg] {elapsed:.1f}s — objects={len(new_objects)} events={len(new_events)} changes={len(changes)}", flush=True)
+        print(f"[kg]   objects={len(new_objects)} events={len(new_events)} changes={len(changes)}", flush=True)
 
-        # Save image once per tick — all new nodes this tick share this image
+        # Save image once — all new nodes this tick share it
         img_id, img_path = store.save_image(b64)
         added = 0
 
-        # ── Insert new objects ────────────────────────────────────────────────
-        for obj in new_objects:
-            label = (obj.get("label") or "").strip().lower()
+        # ── Insert new objects ─────────────────────────────────────────────────
+        for item in new_objects:
+            label, attrs = _obj_label(item)
             if not label or label in known_labels:
                 continue
-            attrs = obj.get("attrs") or {}
             store.add_object(label, attrs, img_id, img_path, now)
-            # _add_image_node is idempotent — duplicate Image inserts are swallowed
             print(f"[kg]   + object: {label}", flush=True)
             added += 1
-            known_labels.add(label)  # prevent duplicate within same tick
+            known_labels.add(label)
 
-        # ── Insert new events ─────────────────────────────────────────────────
-        for evt in new_events:
-            desc = (evt.get("description") or "").strip().lower()
-            if not desc:
+        # ── Insert new events ──────────────────────────────────────────────────
+        for item in new_events:
+            desc, involves = _evt_desc(item)
+            if not desc or not _is_event_new(desc, now):
                 continue
-            involves = [l.lower() for l in (evt.get("involves") or [])]
             store.add_event(desc, involves, img_id, img_path, now)
+            _record_event(desc, now)
             print(f"[kg]   + event: {desc}", flush=True)
             added += 1
 
-        # ── Handle changes (update last_seen on existing objects) ─────────────
-        for change in changes:
-            label = (change.get("label") or "").strip().lower()
-            change_type = change.get("change", "")
-            if label and change_type:
+        # ── Handle changes (update last_seen) ──────────────────────────────────
+        for item in changes:
+            label, change_type = _chg_label(item)
+            if label:
                 print(f"[kg]   ~ change: {label} → {change_type}", flush=True)
                 store.touch_label(label, now)
 
-        # ── Auto-link named faces ─────────────────────────────────────────────
+        # ── Auto-link named faces ──────────────────────────────────────────────
         changed = added > 0
         try:
             raw_face = r.get("face:latest")
@@ -257,13 +295,13 @@ def main():
                 for face in face_data.get("faces") or []:
                     name = face.get("name", "").strip()
                     if name and name.lower() != "unknown":
-                        store.add_person(name.lower(), "", "", now)
+                        store.add_person(name.lower(), img_id, img_path, now)
                         print(f"[kg]   + person: {name}", flush=True)
                         changed = True
         except Exception:
             pass
 
-        # ── Notify dashboard + publish snapshot ───────────────────────────────
+        # ── Publish snapshot ───────────────────────────────────────────────────
         if added:
             r.publish("kg:updated", json.dumps({"ts": now, "added": added}))
             r.set("kg:last_update", str(now), ex=3600)
