@@ -4,6 +4,8 @@
 logs/
 out/
 dataflows/
+tools/
+reports/
 ai/*.pt
 mobileclip_blt.ts
 data/kg/
