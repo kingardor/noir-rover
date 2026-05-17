@@ -4,13 +4,26 @@
 # Labels:
 #   infra     — Docker-based services (Redis)
 #   native    — macOS-native services (bridge, vision, controller)
-#   test-mode — synthetic camera feed for offline development (no robot needed)
+#   test-mode — video loopback feed for offline development (no robot needed)
 #
 # Test mode (no robot required):
-#   tilt up test-feed bridge vision kg dashboard audio
-#   The bridge starts with TEST_MODE=1: sensors return synthetic values,
-#   move commands are no-ops. test-feed writes synthetic camera frames to Redis
-#   so the vision pipeline (YOLOE, VLM, KG builder) runs normally.
+#   Set TEST_MODE=1 in .env — test-feed auto-starts, bridge skips ROS init,
+#   camera endpoints read from Redis (test_feed.py writes recordings/test_feed.mp4).
+#   KG writes to data/kg/graph_db_test so prod graph stays clean.
+
+# ── Read TEST_MODE from .env so auto_init can be conditional ─────────────────
+def _dotenv(key, default=''):
+    content = str(read_file('.env', default=''))
+    for line in content.splitlines():
+        line = line.strip()
+        if not line or line.startswith('#'):
+            continue
+        k, _, v = line.partition('=')
+        if k.strip() == key:
+            return v.strip()
+    return default
+
+_test_mode = _dotenv('TEST_MODE') in ('1', 'true', 'yes')
 
 # ── Docker Compose (infra) ────────────────────────────────────────────────────
 docker_compose('docker-compose.yml')
@@ -38,16 +51,16 @@ local_resource(
     labels=['ready-check'],
 )
 
-# Synthetic camera feed — writes test frames to Redis so the full vision/KG
-# pipeline can run without the Scout robot. Automatically yields to real bridge
-# frames when the robot is on. Start before other services in test mode.
+# Video loopback feed — reads recordings/test_feed.mp4 and writes frames to Redis.
+# Auto-starts when TEST_MODE=1 in .env. Yields to real bridge frames if the
+# robot comes online mid-session.
 local_resource(
     'test-feed',
     serve_cmd='REDIS_URL=redis://localhost:6380 TEST_FPS=5 TEST_VIDEO=recordings/test_feed.mp4 /opt/homebrew/opt/micromamba/bin/micromamba run -n noir_env python -u vision/test_feed.py',
     deps=['vision/test_feed.py'],
     labels=['test-mode'],
     resource_deps=['noir-redis-proxy'],
-    auto_init=False,   # off by default — enable manually when robot is not connected
+    auto_init=_test_mode,  # starts automatically when TEST_MODE=1 in .env
 )
 
 # Bridge runs natively so ROS XMLRPC/TCPROS bind on Mac's real IP (10.42.0.181),
