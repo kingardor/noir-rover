@@ -4,7 +4,8 @@ Knowledge graph storage — thin Kuzu wrapper.
 Schema:
   Node tables  — Object, Event, Person, Image, Diary
   Rel tables   — INVOLVES (Event→Object), WITNESSED_BY (Event→Person),
-                 NEAR (Object→Object), PICTURED_IN (Object→Image),
+                 RELATED (Object→Object, predicate-typed),
+                 PICTURED_IN (Object→Image),
                  CAPTURED_AT (Event→Image), APPEARS_IN (Person→Image)
 
 Concurrency model:
@@ -40,7 +41,7 @@ _SCHEMA = [
     # Relationship tables
     "CREATE REL TABLE IF NOT EXISTS INVOLVES(FROM Event TO Object, ts DOUBLE)",
     "CREATE REL TABLE IF NOT EXISTS WITNESSED_BY(FROM Event TO Person, ts DOUBLE)",
-    "CREATE REL TABLE IF NOT EXISTS NEAR(FROM Object TO Object, ts DOUBLE)",
+    "CREATE REL TABLE IF NOT EXISTS RELATED(FROM Object TO Object, predicate STRING, ts DOUBLE)",
     "CREATE REL TABLE IF NOT EXISTS PICTURED_IN(FROM Object TO Image)",
     "CREATE REL TABLE IF NOT EXISTS CAPTURED_AT(FROM Event TO Image)",
     "CREATE REL TABLE IF NOT EXISTS APPEARS_IN(FROM Person TO Image)",
@@ -320,11 +321,11 @@ class KGStore:
             row = res.get_next()
             edges.append({"from": row[0], "to": row[1], "rel": "witnessed_by"})
 
-        # NEAR edges
-        res = self._conn.execute("MATCH (a:Object)-[:NEAR]->(b:Object) RETURN a.id, b.id")
+        # RELATED edges (open-vocabulary predicate-typed)
+        res = self._conn.execute("MATCH (a:Object)-[r:RELATED]->(b:Object) RETURN a.id, b.id, r.predicate")
         while res.has_next():
             row = res.get_next()
-            edges.append({"from": row[0], "to": row[1], "rel": "near"})
+            edges.append({"from": row[0], "to": row[1], "rel": row[2] or "related"})
 
         return {"nodes": nodes, "edges": edges}
 
@@ -383,6 +384,34 @@ class KGStore:
             res = self._conn.execute(f"MATCH (n:{nt}) RETURN count(n)")
             counts[nt.lower()] = res.get_next()[0] if res.has_next() else 0
         return counts
+
+    def add_relationship(self, subject_label: str, predicate: str, object_label: str, ts: float) -> bool:
+        """Create a RELATED edge between two existing Object nodes by label.
+        Returns True if created, False if either endpoint is missing."""
+        with self._lock:
+            res = self._conn.execute(
+                "MATCH (a:Object {label: $label}) RETURN a.id", {"label": subject_label}
+            )
+            if not res.has_next():
+                return False
+            subj_id = res.get_next()[0]
+
+            res = self._conn.execute(
+                "MATCH (b:Object {label: $label}) RETURN b.id", {"label": object_label}
+            )
+            if not res.has_next():
+                return False
+            obj_id = res.get_next()[0]
+
+            try:
+                self._conn.execute(
+                    "MATCH (a:Object {id: $aid}), (b:Object {id: $bid}) "
+                    "CREATE (a)-[:RELATED {predicate: $pred, ts: $ts}]->(b)",
+                    {"aid": subj_id, "bid": obj_id, "pred": predicate, "ts": ts},
+                )
+            except Exception:
+                return False
+            return True
 
     def touch_label(self, label: str, ts: float):
         """Update last_seen for an Object with the given label (no-op if not found)."""

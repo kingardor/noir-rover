@@ -48,7 +48,7 @@ DEDUP_WINDOW_S = 300  # skip event if same description was inserted within 5 min
 # ── VLM prompt ─────────────────────────────────────────────────────────────────
 
 _PROMPT_TMPL = """\
-You are a robot's perception system. Study this image carefully and identify everything you can see.
+You are a robot's perception system. Study this image and report what you observe.
 
 Things already in my knowledge graph: [{known}]
 
@@ -56,17 +56,18 @@ Return ONLY valid JSON — no markdown, no prose, no code fences:
 
 {{
   "caption": "One clear sentence describing the overall scene",
-  "new_objects": [{{"label": "...", "attrs": {{"color": "...", "material": "..."}}}}],
+  "new_objects": [{{"label": "...", "attrs": {{"color": "...", "size": "..."}}}}],
   "new_events":  [{{"description": "...", "involves": ["label1", "label2"]}}],
+  "relationships": [{{"subject": "label1", "predicate": "on", "object": "label2"}}],
   "changes":     [{{"label": "...", "change": "moved|appeared|disappeared"}}]
 }}
 
-new_objects: List ALL distinct things visible that are NOT already in my knowledge graph.
-  Include: furniture, bags, food, drinks, electronics, clothing, decorations, containers, signs, people.
-  Use short labels (2-3 words max). Be thorough — if you see 10 things, list all 10.
-new_events: Notable activities or situations (person doing something, object being used, etc.).
-changes: Things I already know about that have visibly moved or changed state.
-Use empty arrays only if truly nothing applies. Always include caption. /no_think"""
+Rules:
+- new_objects: every physically distinct, nameable thing NOT already in my graph. Use short noun labels (≤4 words). Be thorough.
+- new_events: transient actions or situations (someone doing something, a state worth remembering). Include which labels are involved.
+- relationships: spatial or functional facts between entities. Subject and object MUST be labels from new_objects this tick or from my existing graph. Use short snake_case predicates (on, next_to, held_by, inside, attached_to, above, behind, leaning_against, connected_to, etc.) — choose whatever fits. Only emit a triple when you can state it confidently.
+- changes: things already in my graph that have visibly moved or changed.
+- Use empty arrays only when truly nothing applies. Always include caption. /no_think"""
 
 
 def _build_prompt(known_labels: set) -> str:
@@ -98,7 +99,7 @@ def _call_vlm(b64_jpeg: str, prompt: str):
                     {"type": "text", "text": prompt},
                 ]}],
                 "temperature": 0.0,
-                "max_tokens": 500,
+                "max_tokens": 800,
                 "stream": False,
             },
             timeout=30,
@@ -195,6 +196,22 @@ def _chg_label(item):
     return _normalize_label((item.get("label") or "").strip()), (item.get("change") or "changed")
 
 
+def _normalize_predicate(p: str) -> str:
+    s = (p or "").strip().lower()
+    s = re.sub(r"[^a-z0-9]+", "_", s).strip("_")
+    # reject empty or sentence-length predicates (>4 tokens after splitting on _)
+    return s if s and len(s.split("_")) <= 4 else ""
+
+
+def _rel_triple(item):
+    if isinstance(item, str):
+        return "", "", ""
+    subj = _normalize_label((item.get("subject") or "").strip())
+    pred = _normalize_predicate(item.get("predicate") or "")
+    obj  = _normalize_label((item.get("object") or "").strip())
+    return subj, pred, obj
+
+
 # ── Main loop ──────────────────────────────────────────────────────────────────
 
 def main():
@@ -265,14 +282,15 @@ def main():
             r.set("vlm:latest", json.dumps({"text": caption, "ts": now, "frame_id": cam_ts}), ex=30)
             print(f"[kg] {elapsed:.1f}s  {caption[:90]}", flush=True)
 
-        new_objects = result.get("new_objects") or []
-        new_events  = result.get("new_events")  or []
-        changes     = result.get("changes")     or []
+        new_objects   = result.get("new_objects")   or []
+        new_events    = result.get("new_events")    or []
+        relationships = result.get("relationships") or []
+        changes       = result.get("changes")       or []
 
-        if not new_objects and not new_events and not changes:
+        if not new_objects and not new_events and not relationships and not changes:
             continue
 
-        print(f"[kg]   objects={len(new_objects)} events={len(new_events)} changes={len(changes)}", flush=True)
+        print(f"[kg]   objects={len(new_objects)} events={len(new_events)} rels={len(relationships)} changes={len(changes)}", flush=True)
 
         # Image is saved lazily — only when the first node is actually inserted.
         # All new nodes this tick share the same image file.
@@ -309,6 +327,20 @@ def main():
             _record_event(desc, now)
             print(f"[kg]   + event: {desc}", flush=True)
             added += 1
+
+        # ── Insert relationships between objects ───────────────────────────────
+        seen_triples: set = set()
+        for item in relationships:
+            subj, pred, obj = _rel_triple(item)
+            if not subj or not pred or not obj or subj == obj:
+                continue
+            key = (subj, pred, obj)
+            if key in seen_triples:
+                continue
+            seen_triples.add(key)
+            if store.add_relationship(subj, pred, obj, now):
+                print(f"[kg]   ↔ {subj} —{pred}→ {obj}", flush=True)
+                added += 1
 
         # ── Handle changes (update last_seen) ──────────────────────────────────
         for item in changes:

@@ -357,16 +357,11 @@ def move_rotate(body: AlgoRoll):
 
 # ── Look around ────────────────────────────────────────────────────────────────
 
-@app.post("/look_around")
-def look_around(n_frames: int = Query(default=8, ge=4, le=16)):
-    """Slow 360° rotation capturing N evenly-spaced frames with available detections."""
+def _run_look_around(n_frames: int) -> dict:
+    """Core 360° sweep logic shared by the endpoint and the agent tool."""
     rotation_speed = 0.5
     total_time = (2 * math.pi) / rotation_speed
     interval = total_time / n_frames
-
-    ok, reason = arbiter_allow(0.0, 0.0, rotation_speed)
-    if not ok:
-        raise HTTPException(403, f"Arbiter blocked: {reason}")
 
     results = []
     slot_ms = int((math.ceil(interval) + 1) * 1000)
@@ -412,6 +407,15 @@ def look_around(n_frames: int = Query(default=8, ge=4, le=16)):
     return {"frames": results, "total_frames": len(results)}
 
 
+@app.post("/look_around")
+def look_around(n_frames: int = Query(default=8, ge=4, le=16)):
+    """Slow 360° rotation capturing N evenly-spaced frames with available detections."""
+    ok, reason = arbiter_allow(0.0, 0.0, 0.5)
+    if not ok:
+        raise HTTPException(403, f"Arbiter blocked: {reason}")
+    return _run_look_around(n_frames)
+
+
 # ── Agent ──────────────────────────────────────────────────────────────────────
 
 def _provider_config() -> tuple:
@@ -434,15 +438,229 @@ def _provider_config() -> tuple:
     )
 
 
+def _vlm_describe_image(question: str) -> str:
+    """Grab the current camera frame and answer a visual question via VLM."""
+    jpg = ros.get_latest_frame()
+    if not jpg:
+        raise RuntimeError("No camera frame available")
+    b64 = base64.b64encode(jpg).decode()
+    url, model, headers = _provider_config()
+    resp = requests.post(url, headers=headers, json={
+        "model": model,
+        "messages": [{"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+            {"type": "text", "text": question + " /no_think"},
+        ]}],
+        "temperature": 0.0,
+        "max_tokens":  200,
+        "stream":      False,
+    }, timeout=30)
+    resp.raise_for_status()
+    return (resp.json().get("choices") or [{}])[0].get("message", {}).get("content", "").strip()
+
+
 _NOIR_SYSTEM = (
     "You are NOIR — a compact omnidirectional wheeled robot with onboard AI. "
     "You're roughly book-sized, fast, and perceptive. You're not a chatbot in a box; "
     "you are a machine that moves through and perceives the physical world.\n\n"
-    "EPISTEMIC RULE: You only know what your sensor feed says this turn. "
-    "If something is not in the feed, you know nothing about it — do not guess or confabulate.\n\n"
     "STYLE: Dry. Clipped. Confident. 1–3 sentences max. Metric units. "
-    "Occasional dry wit is fine. No asterisks, no parentheses, no bullet lists."
+    "Occasional dry wit is fine. No asterisks, no parentheses, no bullet lists.\n\n"
+    "TOOLS: For visual questions call ask_about_scene — it does NOT move the robot. "
+    "Only call look_around when the user explicitly wants the robot to physically rotate and scan. "
+    "For history call recall. "
+    "For motion use the movement tools directly; never describe a movement instead of doing it."
 )
+
+
+# ── Agent tool helpers ─────────────────────────────────────────────────────────
+
+def _tool_move_forward_back(distance_m: float, speed_m_s: float = 0.25) -> dict:
+    ok, reason = arbiter_allow(0.0, distance_m, 0.0)
+    if not ok:
+        return {"ok": False, "error": f"arbiter_blocked: {reason}"}
+    try:
+        result = ros.algo_move(0.0, distance_m, abs(speed_m_s))
+        _record_allowed_move()
+        return {"ok": True, **result}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def _tool_strafe_left_right(distance_m: float, speed_m_s: float = 0.25) -> dict:
+    ok, reason = arbiter_allow(distance_m, 0.0, 0.0)
+    if not ok:
+        return {"ok": False, "error": f"arbiter_blocked: {reason}"}
+    try:
+        result = ros.algo_move(distance_m, 0.0, abs(speed_m_s))
+        _record_allowed_move()
+        return {"ok": True, **result}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def _tool_turn(angle_rad: float, speed_rad_s: float = 1.0) -> dict:
+    ok, reason = arbiter_allow(0.0, 0.0, angle_rad)
+    if not ok:
+        return {"ok": False, "error": f"arbiter_blocked: {reason}"}
+    try:
+        result = ros.algo_roll(angle_rad, speed_rad_s, 10, 0.05)
+        _record_allowed_move()
+        return {"ok": True, **result}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def _tool_stop() -> dict:
+    try:
+        _set_vel(0.0, 0.0, 0.0, 0.0)
+        ros.stop_robot()
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def _tool_ask_about_scene(question: str) -> dict:
+    try:
+        text = _vlm_describe_image(question)
+        return {"ok": True, "text": text}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def _tool_look_around(n_frames: int = 8) -> dict:
+    n = max(4, min(16, int(n_frames)))
+    ok, reason = arbiter_allow(0.0, 0.0, 0.5)
+    if not ok:
+        return {"ok": False, "error": f"arbiter_blocked: {reason}"}
+    try:
+        return {"ok": True, **_run_look_around(n)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def _tool_recall(query: str, since_seconds: Optional[int] = None, limit: int = 10) -> dict:
+    try:
+        snap = _get_kg_snapshot()
+        if not snap:
+            return {"ok": True, "matches": [], "note": "knowledge graph is empty or unavailable"}
+        since_ts = (_now() - since_seconds) if since_seconds else 0.0
+        q = query.lower()
+        matches = []
+        for node in snap.get("nodes", []):
+            label = (node.get("label") or "").lower()
+            if q not in label:
+                continue
+            last_seen = node.get("last_seen") or 0
+            if since_ts and last_seen < since_ts:
+                continue
+            matches.append({
+                "id":         node.get("id"),
+                "type":       node.get("type"),
+                "label":      node.get("label"),
+                "first_seen": node.get("first_seen"),
+                "last_seen":  last_seen,
+            })
+        matches.sort(key=lambda x: x.get("last_seen") or 0, reverse=True)
+        return {"ok": True, "matches": matches[:limit], "total_found": len(matches)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+_TOOLS = [
+    {"type": "function", "function": {
+        "name": "move_forward_back",
+        "description": (
+            "Drive straight forward or backward by a specific distance. "
+            "Use when asked to come closer, back up, or move forward/backward by some amount. "
+            "Blocks until the robot arrives. Max ±1.5 m."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "distance_m": {"type": "number",
+                           "description": "Meters. Positive = forward, negative = backward."},
+            "speed_m_s":  {"type": "number", "description": "Speed in m/s. Default 0.25."},
+        }, "required": ["distance_m"]},
+    }},
+    {"type": "function", "function": {
+        "name": "strafe_left_right",
+        "description": (
+            "Slide sideways without changing heading. "
+            "Use when asked to scoot, sidestep, or move laterally. "
+            "Blocks until arrival. Max ±1.5 m."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "distance_m": {"type": "number",
+                           "description": "Meters. Negative = left, positive = right."},
+            "speed_m_s":  {"type": "number", "description": "Speed in m/s. Default 0.25."},
+        }, "required": ["distance_m"]},
+    }},
+    {"type": "function", "function": {
+        "name": "turn",
+        "description": (
+            "Rotate in place to a relative heading. "
+            "Use for 'turn left/right', 'spin around', 'face the other way'. "
+            "90° = 1.57 rad, 180° = 3.14 rad. Blocks until heading reached."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "angle_rad":    {"type": "number",
+                             "description": "Radians. Positive = clockwise, negative = counter-clockwise."},
+            "speed_rad_s":  {"type": "number", "description": "Angular speed rad/s. Default 1.0."},
+        }, "required": ["angle_rad"]},
+    }},
+    {"type": "function", "function": {
+        "name": "stop",
+        "description": "Immediately stop all motion. Use when asked to halt, freeze, or abort.",
+        "parameters": {"type": "object", "properties": {}, "required": []},
+    }},
+    {"type": "function", "function": {
+        "name": "ask_about_scene",
+        "description": (
+            "Take a fresh camera snapshot and answer a visual question using the onboard VLM. "
+            "Does NOT move the robot. Use whenever the user wants to know what the camera currently sees. "
+            "Takes 3–15 s."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "question": {"type": "string", "description": "The visual question to answer."},
+        }, "required": ["question"]},
+    }},
+    {"type": "function", "function": {
+        "name": "look_around",
+        "description": (
+            "Physically rotate the robot 360° while capturing frames with object detections at each heading. "
+            "MOVES THE ROBOT. Only use when the user explicitly wants the robot to rotate and survey its surroundings. "
+            "Takes ~12 s."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "n_frames": {"type": "integer", "minimum": 4, "maximum": 16,
+                         "description": "Number of frames to capture. Default 8."},
+        }, "required": []},
+    }},
+    {"type": "function", "function": {
+        "name": "recall",
+        "description": (
+            "Search the knowledge graph for entities and events seen in the past. "
+            "Use for 'where did you see the cat?', 'have you seen Akash today?', 'what did you observe an hour ago?'. "
+            "Results are returned newest-first."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "query":         {"type": "string",
+                              "description": "Label or keyword to search for (case-insensitive substring match)."},
+            "since_seconds": {"type": "integer",
+                              "description": "Only return nodes seen within the last N seconds. Omit for all time."},
+            "limit":         {"type": "integer",
+                              "description": "Maximum results to return. Default 10."},
+        }, "required": ["query"]},
+    }},
+]
+
+_TOOL_DISPATCH: dict = {
+    "move_forward_back":  lambda args: _tool_move_forward_back(**args),
+    "strafe_left_right":  lambda args: _tool_strafe_left_right(**args),
+    "turn":               lambda args: _tool_turn(**args),
+    "stop":               lambda args: _tool_stop(),
+    "ask_about_scene":    lambda args: _tool_ask_about_scene(**args),
+    "look_around":        lambda args: _tool_look_around(**args),
+    "recall":             lambda args: _tool_recall(**args),
+}
 
 
 @app.post("/agent/chat")
@@ -450,27 +668,7 @@ def agent_chat(req: ChatReq):
     r = _redis()
     history: list = json.loads(r.get("agent:history") or "[]")
 
-    ctx: list = []
-    try:
-        v = json.loads(r.get("vlm:latest") or "{}")
-        if v.get("text"):
-            ctx.append(f"scene: {v['text']}")
-        d = json.loads(r.get("vision:latest") or "{}")
-        labels = [x.get("label") for x in (d.get("detections") or [])[:5] if x.get("label")]
-        if labels:
-            ctx.append(f"objects: {', '.join(labels)}")
-        f = json.loads(r.get("face:latest") or "{}")
-        names = [p["name"] for p in (f.get("faces") or []) if p.get("name")]
-        if names:
-            ctx.append(f"people: {', '.join(names)}")
-    except Exception:
-        pass
-
-    sys_content = _NOIR_SYSTEM
-    if ctx:
-        sys_content += "\n\nSENSOR FEED:\n" + "\n".join(ctx)
-
-    messages = [{"role": "system", "content": sys_content}]
+    messages = [{"role": "system", "content": _NOIR_SYSTEM}]
     messages.extend(history[-10:])
     user_content = req.message + " /no_think" if _AGENT_PROVIDER == "mlx" else req.message
     messages.append({"role": "user", "content": user_content})
@@ -479,29 +677,82 @@ def agent_chat(req: ChatReq):
     print(f"[agent] provider={_AGENT_PROVIDER} model={chat_model}", flush=True)
 
     def _stream():
+        final_reply = ""
         try:
-            resp = requests.post(
-                chat_url, headers=chat_headers,
-                json={
-                    "model":       chat_model,
-                    "messages":    messages,
-                    "temperature": 0.0,
-                    "stream":      False,
-                },
-                timeout=60,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            reply = (data.get("choices") or [{}])[0].get("message", {}).get("content", "").strip()
+            for _ in range(3):
+                resp = requests.post(
+                    chat_url, headers=chat_headers,
+                    json={
+                        "model":       chat_model,
+                        "messages":    messages,
+                        "tools":       _TOOLS,
+                        "temperature": 0.0,
+                        "stream":      False,
+                    },
+                    timeout=60,
+                )
+                resp.raise_for_status()
+                data    = resp.json()
+                msg     = (data.get("choices") or [{}])[0].get("message", {})
+                content = (msg.get("content") or "").strip()
+
+                # defensive parse: Qwen3-VL-2B sometimes returns tool calls as text
+                tool_calls = msg.get("tool_calls") or []
+                if not tool_calls and content.startswith("[{"):
+                    try:
+                        parsed = json.loads(content)
+                        if isinstance(parsed, list) and parsed[0].get("type") == "function":
+                            tool_calls = parsed
+                    except Exception:
+                        pass
+
+                if not tool_calls:
+                    final_reply = content
+                    break
+
+                messages.append({"role": "assistant", "content": content, "tool_calls": tool_calls})
+
+                for tc in tool_calls:
+                    fn_name = (tc.get("function") or {}).get("name", "")
+                    raw_args = (tc.get("function") or {}).get("arguments", "{}")
+                    tc_id    = tc.get("id", fn_name)
+
+                    try:
+                        args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                    except Exception:
+                        args = {}
+
+                    dispatcher = _TOOL_DISPATCH.get(fn_name)
+                    if dispatcher is None:
+                        result = {"ok": False, "error": f"unknown_tool: {fn_name}"}
+                    else:
+                        try:
+                            result = dispatcher(args)
+                        except Exception as exc:
+                            result = {"ok": False, "error": str(exc)}
+
+                    print(f"[agent] tool={fn_name} result={str(result)[:120]}", flush=True)
+                    yield f"data: {json.dumps({'type': 'tool_call', 'name': fn_name, 'args': args, 'result': result})}\n\n"
+
+                    messages.append({
+                        "role":         "tool",
+                        "tool_call_id": tc_id,
+                        "content":      json.dumps(result)[:1500],
+                    })
+            else:
+                final_reply = "[noir] hit tool-call limit."
         except Exception as exc:
-            reply = f"[noir] unreachable: {exc}"
-        print(f"[agent] reply: {reply[:100]!r}", flush=True)
-        yield f"data: {json.dumps({'type': 'reply', 'text': reply})}\n\n"
+            final_reply = f"[noir] unreachable: {exc}"
+
+        print(f"[agent] reply: {final_reply[:100]!r}", flush=True)
+        yield f"data: {json.dumps({'type': 'reply', 'text': final_reply})}\n\n"
+
         history.append({"role": "user",      "content": req.message})
-        history.append({"role": "assistant", "content": reply or "…"})
+        history.append({"role": "assistant", "content": final_reply or "…"})
         r.set("agent:history", json.dumps(history[-20:]), ex=1800)
 
-    return StreamingResponse(_stream(), media_type="text/event-stream")
+    return StreamingResponse(_stream(), media_type="text/event-stream",
+                             headers={"X-Accel-Buffering": "no"})
 
 
 @app.post("/agent/reset")
@@ -539,25 +790,11 @@ def agent_follow(req: FollowReq):
 @app.post("/vision/describe")
 def vision_describe(req: DescribeReq):
     """Answer a visual question about the current camera frame using the VLM."""
-    jpg = ros.get_latest_frame()
-    if not jpg:
-        raise HTTPException(404, "No camera frame available")
-    b64 = base64.b64encode(jpg).decode()
-    url, model, headers = _provider_config()
     try:
-        resp = requests.post(url, headers=headers, json={
-            "model": model,
-            "messages": [{"role": "user", "content": [
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-                {"type": "text", "text": req.question + " /no_think"},
-            ]}],
-            "temperature": 0.0,
-            "max_tokens": 200,
-            "stream": False,
-        }, timeout=30)
-        resp.raise_for_status()
-        text = (resp.json().get("choices") or [{}])[0].get("message", {}).get("content", "").strip()
+        text = _vlm_describe_image(req.question)
         return {"text": text}
+    except RuntimeError as e:
+        raise HTTPException(404, str(e))
     except Exception as e:
         raise HTTPException(503, str(e))
 

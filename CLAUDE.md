@@ -97,7 +97,7 @@ The `catkin_ws/` directory is gitignored. `make build-bridge` creates it from `r
 
 ### Bridge (ros-noetic/) — runs natively via RoboStack micromamba
 - **`scoutros.py`** — Only ROS-touching code. Publishes Twist on `/cmd_vel`; subscribes to camera, ToF, IMU, VIO, battery. Service wrappers for `algo_action`, `algo_move`, `algo_roll`, nav.
-- **`bridge-api.py`** — FastAPI bridge (v5). Magnitude-clamp safety arbiter, all endpoints. Plain conversational agent chat (no tool calling). Uses Redis for vision state and Xbox activity tracking. Runs on port 8012.
+- **`bridge-api.py`** — FastAPI bridge (v5). Magnitude-clamp safety arbiter, all endpoints. Agent chat with 7 OpenAI-function-calling tools (4 movement + 3 vision); 3-iteration dispatcher loop streams SSE tool_call events. Uses Redis for vision state and Xbox activity tracking. Runs on port 8012.
 
 ### Native macOS (Python 3.11+)
 - **`vision/app.py`** — YOLOE on MPS. Publishes `vision:latest` JSON and `vision:thumb:{id}` to Redis. Runs `vision/memory.py` as thread.
@@ -129,7 +129,7 @@ The `catkin_ws/` directory is gitignored. `make build-bridge` creates it from `r
 | `POST /nav/cancel` | Cancel navigation |
 | `GET /nav/status` | NavPathNode status code |
 | `POST /nav/path/save` | Save current path |
-| `POST /agent/chat` | Conversational chat with NOIR (plain, no tool calling) |
+| `POST /agent/chat` | Chat with NOIR; calls one of 7 tools (movement + vision) via OpenAI function-calling, streams SSE `{type:"tool_call",...}` events then `{type:"reply"}` |
 | `POST /agent/reset` | Reset conversation history |
 | `POST /agent/follow` | Enable/disable face-following `{on, target_name}` |
 | `POST /vision/describe` | On-demand VLM answer for a visual question `{question}` |

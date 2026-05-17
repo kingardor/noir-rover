@@ -189,6 +189,53 @@
     .estop:active { transform: scale(.96); }
     .estop svg { width: 17px; height: 17px; flex-shrink: 0; }
 
+    /* ── Header battery widget ─────────────────────────────────────────────── */
+    .hdr-bat {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      flex-shrink: 0;
+      color: var(--fg-dim);
+      transition: color 400ms, text-shadow 400ms;
+    }
+    .hdr-bat-icon {
+      position: relative;
+      width: 30px;
+      height: 14px;
+      border: 1.5px solid currentColor;
+      border-radius: 2px;
+      flex-shrink: 0;
+    }
+    .hdr-bat-icon::after {
+      content: '';
+      position: absolute;
+      right: -5px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 3px;
+      height: 7px;
+      background: currentColor;
+      border-radius: 0 1px 1px 0;
+    }
+    .hdr-bat-fill {
+      height: 100%;
+      background: currentColor;
+      border-radius: 1px;
+      opacity: .75;
+      transition: width 600ms ease;
+    }
+    .hdr-bat-pct {
+      font-family: var(--font-hd);
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: .04em;
+      min-width: 42px;
+      transition: color 400ms, text-shadow 400ms;
+    }
+    .hdr-bat.ok  { color: var(--accent);  text-shadow: var(--glow-green); }
+    .hdr-bat.warn{ color: var(--amber);   text-shadow: var(--glow-amber); }
+    .hdr-bat.crit{ color: var(--red);     text-shadow: var(--glow-red);   }
+
     /* ── Main grid ──────────────────────────────────────────────────────────── */
     .main {
       display: grid;
@@ -434,7 +481,7 @@
     .sensor-cell { background: var(--card); padding: 5px 9px; min-width: 0; }
 
     .s-lbl { font-family: var(--font-hd); font-size: 7px; font-weight: 700; letter-spacing: .12em; color: var(--fg-dim); margin-bottom: 3px; }
-    .s-val { font-size: 14px; font-weight: 500; line-height: 1; color: var(--cyan); text-shadow: var(--glow-cyan); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .s-val { font-size: 14px; font-weight: 500; line-height: 1; color: var(--cyan); text-shadow: 0 0 5px rgba(0,212,255,.2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .s-unit { font-size: 8px; color: var(--fg-dim); margin-left: 1px; }
 
     /* Drive pad */
@@ -879,6 +926,14 @@
 
   <div class="hdr-spacer"></div>
 
+  <!-- Battery -->
+  <div class="hdr-bat" id="hdr-bat">
+    <div class="hdr-bat-icon">
+      <div class="hdr-bat-fill" id="hdr-bat-fill" style="width:0%"></div>
+    </div>
+    <span class="hdr-bat-pct" id="hdr-bat-pct">--%</span>
+  </div>
+
   <!-- E-STOP -->
   <button class="estop" onclick="doEstop()" title="Emergency stop — halts all motion immediately">
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
@@ -920,10 +975,6 @@
       <div class="sensor-cell">
         <div class="s-lbl">RANGE</div>
         <div class="s-val" id="s-range">--<span class="s-unit">m</span></div>
-      </div>
-      <div class="sensor-cell">
-        <div class="s-lbl">BATTERY</div>
-        <div class="s-val" id="s-bat">--<span class="s-unit">%</span> <span class="s-unit" id="s-chg"></span></div>
       </div>
       <div class="sensor-cell">
         <div class="s-lbl">ACCEL X</div>
@@ -1246,17 +1297,22 @@ async function pollSensors() {
   // ToF range
   document.getElementById('s-range').innerHTML = _sv(d.tof_range_m, 2, 'm');
 
-  // Battery
+  // Battery (header widget only)
   const bat = d.battery?.percentage;
-  const batEl = document.getElementById('s-bat');
+  const hdrBat  = document.getElementById('hdr-bat');
+  const hdrFill = document.getElementById('hdr-bat-fill');
+  const hdrPct  = document.getElementById('hdr-bat-pct');
   if (bat != null) {
     const pct = Math.round(bat);
-    const [c, g] = pct > 50 ? ['var(--accent)', 'var(--glow-green)'] : pct > 20 ? ['var(--amber)', '0 0 8px rgba(255,179,71,.5)'] : ['var(--red)', 'var(--glow-red)'];
     const chg = d.battery?.charging;
-    const chgTag = chg ? `<span style="color:var(--accent);font-size:10px">⚡</span>` : d.battery?.full ? `<span style="color:var(--accent);font-size:10px">FULL</span>` : '';
-    batEl.innerHTML = `<span style="color:${c};text-shadow:${g}">${pct}</span><span class="s-unit">% ${chgTag}</span>`;
+    const cls = pct > 50 ? 'ok' : pct > 20 ? 'warn' : 'crit';
+    hdrBat.className = `hdr-bat ${cls}`;
+    hdrFill.style.width = `${pct}%`;
+    hdrPct.textContent = chg ? `${pct}% ⚡` : d.battery?.full ? `${pct}% FULL` : `${pct}%`;
   } else {
-    batEl.innerHTML = `--<span class="s-unit">%</span>`;
+    hdrBat.className = 'hdr-bat';
+    hdrFill.style.width = '0%';
+    hdrPct.textContent = '--%';
   }
 
   // IMU — linear acceleration (all 3 axes)
@@ -1641,10 +1697,23 @@ async function _runVoicePipeline() {
         source.buffer  = decoded;
         source.connect(_audioCtx.destination);
         source.onended = () => _setVoiceState('idle');
+        // Resume in case context auto-suspended during the long STT+agent round-trip.
+        await _audioCtx.resume();
         source.start();
         return; // state transitions via source.onended
+      } else {
+        const errText = await ttsRes.text().catch(() => '');
+        console.error('[tts] server error', ttsRes.status, errText);
+        voiceStatus.textContent = `tts error ${ttsRes.status}`;
+        setTimeout(() => _setVoiceState('idle'), 2000);
+        return;
       }
-    } catch { /* TTS failed — still show text, just don't play */ }
+    } catch (err) {
+      console.error('[tts] failed:', err);
+      voiceStatus.textContent = 'tts failed';
+      setTimeout(() => _setVoiceState('idle'), 2000);
+      return;
+    }
   }
 
   _setVoiceState('idle');
