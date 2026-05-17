@@ -43,7 +43,7 @@ local_resource(
 # frames when the robot is on. Start before other services in test mode.
 local_resource(
     'test-feed',
-    serve_cmd='REDIS_URL=redis://localhost:6380 TEST_FPS=5 /opt/homebrew/opt/micromamba/bin/micromamba run -n noir_env python -u vision/test_feed.py',
+    serve_cmd='REDIS_URL=redis://localhost:6380 TEST_FPS=5 TEST_VIDEO=recordings/test_feed.mp4 /opt/homebrew/opt/micromamba/bin/micromamba run -n noir_env python -u vision/test_feed.py',
     deps=['vision/test_feed.py'],
     labels=['test-mode'],
     resource_deps=['noir-redis-proxy'],
@@ -107,7 +107,7 @@ local_resource(
 # Replaces the old separate vlm.py and kg_builder.py services.
 local_resource(
     'kg',
-    serve_cmd='REDIS_URL=redis://localhost:6380 MLX_VLM_URL=http://localhost:8000 VLM_MODEL=mlx-community/Qwen3-VL-2B-Instruct-4bit KG_INTERVAL=10.0 /opt/homebrew/opt/micromamba/bin/micromamba run -n noir_env python -u vision/kg_builder.py',
+    serve_cmd='set -a; [ -f .env ] && . .env; set +a; REDIS_URL=redis://localhost:6380 MLX_VLM_URL=http://localhost:8000 VLM_MODEL=mlx-community/Qwen3-VL-2B-Instruct-4bit KG_INTERVAL=10.0 /opt/homebrew/opt/micromamba/bin/micromamba run -n noir_env python -u vision/kg_builder.py',
     deps=['vision/kg_builder.py', 'vision/kg_store.py'],
     labels=['native'],
     resource_deps=['bridge-ready', 'vlm-server-ready'],

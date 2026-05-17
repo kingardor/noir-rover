@@ -33,6 +33,13 @@ import requests
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).parent))
+
+# Redirect KG storage to test paths before KGStore reads its env vars at import time.
+if os.getenv("TEST_MODE") == "1":
+    _root = Path(__file__).parent.parent
+    os.environ.setdefault("KG_DB_DIR",     str(_root / "data" / "kg" / "graph_db_test"))
+    os.environ.setdefault("KG_IMAGES_DIR", str(_root / "data" / "kg" / "images_test"))
+
 from kg_store import KGStore
 
 # ── Config ─────────────────────────────────────────────────────────────────────
