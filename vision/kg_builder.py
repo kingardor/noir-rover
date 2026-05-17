@@ -271,7 +271,6 @@ def main():
                 cam_ts = ts2
 
         last_cam_ts = cam_ts
-        now = time.time()
 
         # ── Call VLM ──────────────────────────────────────────────────────────
         known_labels = store.existing_labels()
@@ -282,6 +281,10 @@ def main():
 
         if not result:
             continue
+
+        # Timestamp after inference so vlm:latest.ts reflects when the caption
+        # was actually written, not when the VLM call started.
+        now = time.time()
 
         # ── Write caption → vlm:latest ─────────────────────────────────────────
         caption = (result.get("caption") or "").strip()
