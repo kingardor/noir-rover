@@ -148,6 +148,23 @@ def _camera_frame_writer():
             pass
 
 
+def _get_frame_bytes() -> Optional[bytes]:
+    """Return latest camera frame as JPEG bytes.
+
+    In test mode reads from Redis (written by test_feed.py).
+    In live mode reads from the ROS camera subscriber.
+    """
+    if _TEST_MODE:
+        try:
+            b64 = _redis().get("camera:frame")
+            if b64:
+                return base64.b64decode(b64)
+        except Exception:
+            pass
+        return None
+    return ros.get_latest_frame()
+
+
 def _vel_hold_loop():
     dt = 1.0 / _HOLD_HZ
     last_zero_sent = True
@@ -185,10 +202,11 @@ ros = ScoutROS(node_name="scout_api")
 
 @app.on_event("startup")
 def startup():
-    threading.Thread(target=ros.init,                daemon=True).start()
-    threading.Thread(target=_camera_frame_writer,    daemon=True).start()
-    threading.Thread(target=_vel_hold_loop,          daemon=True).start()
-    threading.Thread(target=_follow_loop,            daemon=True).start()
+    if not _TEST_MODE:
+        threading.Thread(target=ros.init,             daemon=True).start()
+        threading.Thread(target=_camera_frame_writer, daemon=True).start()
+    threading.Thread(target=_vel_hold_loop,           daemon=True).start()
+    threading.Thread(target=_follow_loop,             daemon=True).start()
 
 
 # ── Status / Camera ────────────────────────────────────────────────────────────
@@ -209,7 +227,7 @@ def status():
 
 @app.get("/camera/frame")
 def camera_frame():
-    jpg = ros.get_latest_frame()
+    jpg = _get_frame_bytes()
     if not jpg:
         raise HTTPException(404, "No camera frame available")
     return Response(content=jpg, media_type="image/jpeg")
@@ -217,7 +235,7 @@ def camera_frame():
 
 async def _mjpeg_generator():
     while True:
-        jpg = ros.get_latest_frame()
+        jpg = _get_frame_bytes()
         if jpg:
             yield b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + jpg + b'\r\n'
         await asyncio.sleep(1 / 15)
@@ -244,7 +262,7 @@ def snapshot():
                     return Response(content=base64.b64decode(thumb), media_type="image/jpeg")
     except Exception:
         pass
-    jpg = ros.get_latest_frame()
+    jpg = _get_frame_bytes()
     if not jpg:
         raise HTTPException(404, "No frame available")
     return Response(content=jpg, media_type="image/jpeg")
