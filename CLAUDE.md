@@ -21,8 +21,8 @@ make sync            # micromamba env update -f environment.yml
 # Full stack with live UI (robot must be on)
 tilt up
 
-# Fallback: plain bash (no Tilt UI)
-make dev             # or: bash scripts/dev.sh
+# Fallback: start bridge manually
+bash scripts/start_bridge.sh   # requires ros_env + catkin_ws built
 ```
 
 ## Test mode (no robot required)
@@ -50,6 +50,9 @@ All services run natively on macOS or in Docker for Redis only.
 | Service | Port | Notes |
 |---|---|---|
 | Bridge API | `:8012` | Runs natively; all rover control + perception endpoints |
+| Dashboard | `:8013` | Static HTML, `python3 -m http.server` from `dashboard/` |
+| Audio sidecar | `:8014` | STT + TTS FastAPI (`audio/server.py`), runs in `noir_env` |
+| VLM server | `:8000` | `mlx_vlm.server` — Qwen3-VL-2B-Instruct-4bit |
 | Redis | `:6380` | Proxied from Docker VM via noir-redis-proxy |
 
 Native macOS services use `BRIDGE_URL=http://localhost:8012` and `REDIS_URL=redis://localhost:6380`.
@@ -97,15 +100,19 @@ The `catkin_ws/` directory is gitignored. `make build-bridge` creates it from `r
 
 ### Bridge (ros-noetic/) — runs natively via RoboStack micromamba
 - **`scoutros.py`** — Only ROS-touching code. Publishes Twist on `/cmd_vel`; subscribes to camera, ToF, IMU, VIO, battery. Service wrappers for `algo_action`, `algo_move`, `algo_roll`, nav.
-- **`bridge-api.py`** — FastAPI bridge (v5). Magnitude-clamp safety arbiter, all endpoints. Agent chat with 7 OpenAI-function-calling tools (4 movement + 3 vision); 3-iteration dispatcher loop streams SSE tool_call events. Uses Redis for vision state and Xbox activity tracking. Runs on port 8012.
+- **`bridge-api.py`** — FastAPI bridge (v5). Magnitude-clamp safety arbiter, all endpoints. Agent chat with **5 OpenAI-function-calling tools** (4 movement: `move_forward_back`, `strafe_left_right`, `turn`, `stop`; 1 vision: `ask_about_scene`); 3-iteration dispatcher loop streams SSE `tool_call_start`/`tool_call_result`/`reply` events. Uses Redis for vision state and Xbox activity tracking. Runs on port 8012.
 
 ### Native macOS (Python 3.11+)
 - **`vision/app.py`** — YOLOE on MPS. Publishes `vision:latest` JSON and `vision:thumb:{id}` to Redis. Runs `vision/memory.py` as thread.
 - **`vision/memory.py`** — Debounced detection writer to `memory:events` Redis stream.
 - **`vision/kg_builder.py`** — Combined perception service. Samples one camera frame every `KG_SAMPLE_INTERVAL` seconds (default 3 s) into a rolling deque of `KG_FRAMES` (default 3) frames. As soon as a fresh frame is added and the deque is full, sends all frames as a single batched call to Qwen3-VL-2B-4bit via `mlx_vlm.server` at `:8000`. The prompt is **stateless** (no known-labels injection). Extracted `objects`, `events`, and `relationships` are post-hoc fuzzy-merged against existing DB nodes via `difflib.SequenceMatcher`. All batch frames are attached as images to each inserted/matched node, enabling per-node image galleries that grow over time. Writes caption to `vlm:latest` (TTL 30 s). Publishes `kg:snapshot` (full graph JSON, TTL 300 s) after any change. Handles `kg:reset` signal from bridge. Auto-links named faces from `face:latest`. Runs in **noir_env** (kuzu is only installed there).
-- **`vision/kg_store.py`** — Thin Kuzu wrapper. Schema: Object, Event, Person, Image, Diary node tables; INVOLVES, WITNESSED_BY, NEAR, PICTURED_IN, CAPTURED_AT, APPEARS_IN rel tables. Key methods: `add_object`, `add_event`, `add_person`, `touch_label`, `save_image`, `existing_labels`, `query_by_label`, `graph_snapshot`, `get_node_images`. Run `python vision/kg_store.py --self-test` for a CRUD round-trip.
+- **`vision/kg_store.py`** — Thin Kuzu wrapper. Schema: Object, Event, Person, Image, Diary node tables; INVOLVES, WITNESSED_BY, **RELATED** (Object→Object, open-vocabulary `predicate`, replaces the stale `NEAR` name), PICTURED_IN, CAPTURED_AT, APPEARS_IN rel tables. Key methods: `add_object`, `add_event`, `add_person`, `touch_label`, `save_image`, `existing_labels`, `query_by_label`, `graph_snapshot`, `get_node_images`. Run `python vision/kg_store.py --self-test` for a CRUD round-trip.
 - **`vision/facerec.py`** — Face recognition using InsightFace (`buffalo_l`). Polls `vision:latest`, detects + identifies faces against enrolled images in `faces/`, publishes to `face:latest` (TTL 10s). Enrolled images: `faces/<Name>.jpg`. Threshold: 0.35 cosine similarity.
 - **`controllers/driver.py`** — Xbox / PS5 controller loop via GameController.framework at 60 Hz. Stamps `xbox:last_input_ts` in Redis on input.
+- **`audio/server.py`** — STT + TTS FastAPI sidecar on port 8014. STT: Parakeet TDT 0.6B (`mlx-community/parakeet-tdt-0.6b-v3`). TTS: Kokoro 82M (`mlx-community/Kokoro-82M-4bit`, voice `af_heart`). Endpoints: `GET /audio/health`, `POST /audio/stt` (multipart → JSON text), `POST /audio/tts` (JSON → WAV). Runs a TTS warmup on startup to pre-initialize the pipeline.
+
+### Dashboard
+- **`dashboard/index.html`** — Single-page static web UI on port 8013, served by `python3 -m http.server`. No build step. CAMERA tab: live MJPEG, agent chat with SSE tool-call rendering, voice I/O via audio sidecar. KNOWLEDGE tab: vis-network KG graph, per-node image gallery, diary view.
 
 ## Bridge API endpoints (port 8012)
 
@@ -129,8 +136,9 @@ The `catkin_ws/` directory is gitignored. `make build-bridge` creates it from `r
 | `POST /nav/cancel` | Cancel navigation |
 | `GET /nav/status` | NavPathNode status code |
 | `POST /nav/path/save` | Save current path |
-| `POST /agent/chat` | Chat with NOIR; calls one of 7 tools (movement + vision) via OpenAI function-calling, streams SSE `{type:"tool_call",...}` events then `{type:"reply"}` |
+| `POST /agent/chat` | Chat with NOIR; calls one of 5 tools (movement + vision) via OpenAI function-calling, streams SSE `tool_call_start`/`tool_call_result`/`reply` events |
 | `POST /agent/reset` | Reset conversation history |
+| `GET /agent/follow_status` | Current face-following config |
 | `POST /agent/follow` | Enable/disable face-following `{on, target_name}` |
 | `POST /vision/describe` | On-demand VLM answer for a visual question `{question}` |
 | `GET /vlm/description` | Latest scene caption from kg_builder (TTL 30s) |
@@ -160,7 +168,9 @@ angular.z = rotation (+ = clockwise)
 | Key | Type | TTL | Writer |
 |---|---|---|---|
 | `xbox:last_input_ts` | string | 5s | `controllers/driver.py` |
-| `vision:latest` | JSON string | 2s | `vision/app.py` |
+| `camera:frame` | base64 JPEG string | 5s | bridge `_camera_frame_writer` or `vision/test_feed.py` |
+| `camera:ts` | string | 5s | same as above |
+| `vision:latest` | JSON string | 10s | `vision/app.py` |
 | `vision:thumb:{frame_id}` | base64 JPEG | 60s | `vision/app.py` |
 | `vision:events` (pubsub) | channel | — | `vision/app.py` |
 | `memory:events` | Redis stream | — | `vision/memory.py` |
@@ -171,6 +181,8 @@ angular.z = rotation (+ = clockwise)
 | `kg:last_update` | unix timestamp string | 3600s | `vision/kg_builder.py` |
 | `kg:reset` | sentinel "1" | 30s | `ros-noetic/bridge-api.py` |
 | `kg:diary:{date}` | diary text string | 86400s | `ros-noetic/bridge-api.py` |
+| `agent:history` | JSON list (last 20 msgs) | 1800s | `ros-noetic/bridge-api.py` |
+| `agent:follow_cfg` | JSON {on,target,started} | — | `ros-noetic/bridge-api.py` |
 
 ## Custom ROS messages (roller_eye package)
 
