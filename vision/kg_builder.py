@@ -2,14 +2,15 @@
 """
 Perception service — caption + knowledge graph.
 
-Runs on a timer (KG_INTERVAL seconds, default 10). Each tick:
-  1. Grabs the latest camera frame from Redis.
-  2. Calls Qwen3-VL with a combined prompt → caption + structured KG updates.
-  3. Writes caption to vlm:latest (TTL 30s) — schema: {text, ts, frame_id}.
-  4. Writes new nodes/edges to Kuzu with deduplication:
-       - Objects: upsert by label (kg_store handles it)
-       - Events:  skip if same description added within DEDUP_WINDOW_S seconds
-       - Changes: touch_label() to update last_seen
+Continuously samples one camera frame every KG_SAMPLE_INTERVAL seconds into a
+rolling buffer (deque, maxlen=KG_FRAMES). As soon as the buffer is full and a
+new frame was just added, calls Qwen3-VL with all KG_FRAMES images at once:
+
+  1. Multi-image stateless VLM call → caption + KG updates.
+  2. Writes caption to vlm:latest (TTL 30s) — schema: {text, ts, frame_id}.
+  3. Post-hoc fuzzy merge: incoming labels/descriptions are matched against
+     existing DB nodes via normalized string similarity before insertion.
+  4. All frames in the batch are attached as images to each new/matched node.
   5. Publishes kg:snapshot to Redis after any graph change (TTL 300s).
   6. Auto-links named faces from face:latest to Person nodes.
 
@@ -19,6 +20,7 @@ Usage:
     REDIS_URL=redis://localhost:6380 python -u vision/kg_builder.py
 """
 import base64
+import collections
 import io
 import json
 import os
@@ -47,39 +49,35 @@ from kg_store import KGStore
 REDIS_URL   = os.getenv("REDIS_URL",   "redis://localhost:6380")
 MLX_VLM_URL = os.getenv("MLX_VLM_URL", "http://localhost:8000")
 VLM_MODEL   = os.getenv("VLM_MODEL",   "mlx-community/Qwen3-VL-2B-Instruct-4bit")
-VLM_SIZE    = int(os.getenv("VLM_SIZE", "384"))
-KG_INTERVAL = float(os.getenv("KG_INTERVAL", "10.0"))
-
-DEDUP_WINDOW_S = 300  # skip event if same description was inserted within 5 min
+VLM_SIZE               = int(os.getenv("VLM_SIZE",                 "256"))
+KG_SAMPLE_INTERVAL     = float(os.getenv("KG_SAMPLE_INTERVAL",     "3.0"))
+KG_FRAMES              = int(os.getenv("KG_FRAMES",                "3"))
+KG_FUZZY_OBJ_THRESHOLD = float(os.getenv("KG_FUZZY_OBJ_THRESHOLD", "0.82"))
+KG_FUZZY_EVT_THRESHOLD = float(os.getenv("KG_FUZZY_EVT_THRESHOLD", "0.78"))
 
 # ── VLM prompt ─────────────────────────────────────────────────────────────────
 
-_PROMPT_TMPL = """\
-You are a robot's perception system. Study this image and report what you observe.
-
-Things already in my knowledge graph: [{known}]
+_PROMPT = """\
+You are a robot's perception system. Frames captured seconds apart from the \
+same vantage are below. Treat them as one scene observed over a brief moment.
 
 Return ONLY valid JSON — no markdown, no prose, no code fences:
 
-{{
+{
   "caption": "One clear sentence describing the overall scene",
-  "new_objects": [{{"label": "...", "attrs": {{"color": "...", "size": "..."}}}}],
-  "new_events":  [{{"description": "...", "involves": ["label1", "label2"]}}],
-  "relationships": [{{"subject": "label1", "predicate": "on", "object": "label2"}}],
-  "changes":     [{{"label": "...", "change": "moved|appeared|disappeared"}}]
-}}
+  "objects":  [{"label": "...", "attrs": {"color": "...", "size": "..."}}],
+  "events":   [{"description": "...", "involves": ["label1", "label2"]}],
+  "relationships": [{"subject": "label1", "predicate": "on", "object": "label2"}]
+}
 
 Rules:
-- new_objects: every physically distinct, nameable thing NOT already in my graph. Use short noun labels (≤4 words). Be thorough.
-- new_events: transient actions or situations (someone doing something, a state worth remembering). Include which labels are involved.
-- relationships: spatial or functional facts between entities. Subject and object MUST be labels from new_objects this tick or from my existing graph. Use short snake_case predicates (on, next_to, held_by, inside, attached_to, above, behind, leaning_against, connected_to, etc.) — choose whatever fits. Only emit a triple when you can state it confidently.
-- changes: things already in my graph that have visibly moved or changed.
-- Use empty arrays only when truly nothing applies. Always include caption. /no_think"""
-
-
-def _build_prompt(known_labels: set) -> str:
-    known = ", ".join(sorted(known_labels)[:40]) if known_labels else "nothing yet"
-    return _PROMPT_TMPL.format(known=known)
+- objects: every physically distinct, nameable thing across the frames. \
+Short noun labels (≤4 words). Be thorough.
+- events: transient actions or situations visible in any frame. Include \
+the object labels involved.
+- relationships: spatial facts. Subject and object must be object labels. \
+Use snake_case predicates. Only emit when confident.
+- Use empty arrays when nothing applies. Always include caption. /no_think"""
 
 
 # ── Image helpers ──────────────────────────────────────────────────────────────
@@ -92,24 +90,25 @@ def _resize_b64(b64_jpeg: str, size: int) -> str:
     return base64.b64encode(buf.getvalue()).decode()
 
 
-def _call_vlm(b64_jpeg: str, prompt: str):
-    """Call Qwen3-VL and return parsed JSON dict, or None on failure."""
+def _call_vlm(b64_list: list, prompt: str):
+    """Call Qwen3-VL with one or more images and return parsed JSON dict, or None on failure."""
     try:
-        b64 = _resize_b64(b64_jpeg, VLM_SIZE)
+        content = []
+        for b64 in b64_list:
+            b64r = _resize_b64(b64, VLM_SIZE)
+            content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64r}"}})
+        content.append({"type": "text", "text": prompt})
         resp = requests.post(
             f"{MLX_VLM_URL}/v1/chat/completions",
             headers={"Content-Type": "application/json"},
             json={
                 "model": VLM_MODEL,
-                "messages": [{"role": "user", "content": [
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-                    {"type": "text", "text": prompt},
-                ]}],
+                "messages": [{"role": "user", "content": content}],
                 "temperature": 0.0,
                 "max_tokens": 800,
                 "stream": False,
             },
-            timeout=30,
+            timeout=45,
         )
         resp.raise_for_status()
         text = (resp.json().get("choices") or [{}])[0].get("message", {}).get("content", "").strip()
@@ -147,24 +146,6 @@ def _publish_snapshot(store: KGStore, r: redis_lib.Redis, ts: float):
         print(f"[kg] snapshot publish failed: {e}", flush=True)
 
 
-# ── Event dedup ────────────────────────────────────────────────────────────────
-
-_recent_events: dict = {}  # description → ts of last insert
-
-
-def _is_event_new(desc: str, now: float) -> bool:
-    last = _recent_events.get(desc)
-    return last is None or (now - last) >= DEDUP_WINDOW_S
-
-
-def _record_event(desc: str, now: float):
-    _recent_events[desc] = now
-    cutoff = now - DEDUP_WINDOW_S
-    for k in list(_recent_events):
-        if _recent_events[k] < cutoff:
-            del _recent_events[k]
-
-
 # ── VLM item coercion (handle str or dict from VLM) ───────────────────────────
 
 _ARTICLES = ("a ", "an ", "the ")
@@ -197,16 +178,9 @@ def _evt_desc(item):
     return (item.get("description") or "").strip().lower(), involves
 
 
-def _chg_label(item):
-    if isinstance(item, str):
-        return _normalize_label(item), "changed"
-    return _normalize_label((item.get("label") or "").strip()), (item.get("change") or "changed")
-
-
 def _normalize_predicate(p: str) -> str:
     s = (p or "").strip().lower()
     s = re.sub(r"[^a-z0-9]+", "_", s).strip("_")
-    # reject empty or sentence-length predicates (>4 tokens after splitting on _)
     return s if s and len(s.split("_")) <= 4 else ""
 
 
@@ -225,13 +199,16 @@ def main():
     r = redis_lib.from_url(REDIS_URL, decode_responses=True)
     store = KGStore()
 
-    print(f"[kg] Store ready. VLM={VLM_MODEL}  interval={KG_INTERVAL}s", flush=True)
+    print(f"[kg] Store ready. VLM={VLM_MODEL}  sample={KG_SAMPLE_INTERVAL}s  frames={KG_FRAMES}", flush=True)
 
-    last_cam_ts = None
+    # Rolling buffer of the latest KG_FRAMES camera frames.
+    # A new frame is sampled every KG_SAMPLE_INTERVAL seconds; VLM fires when
+    # the buffer is full and a fresh frame was just added.
+    frame_buffer  = collections.deque(maxlen=KG_FRAMES)
+    last_cam_ts   = None
+    last_sample_t = 0.0
 
     while True:
-        t0 = time.time()
-
         # Handle reset signal from bridge POST /kg/reset
         if r.get("kg:reset"):
             store.reset()
@@ -240,105 +217,104 @@ def main():
             r.delete("kg:reset")
             r.delete("kg:snapshot")
             r.set("kg:last_update", "0", ex=3600)
-            _recent_events.clear()
+            frame_buffer.clear()
+            last_cam_ts   = None
+            last_sample_t = 0.0
             print("[kg] reset complete", flush=True)
-            time.sleep(KG_INTERVAL)
             continue
 
-        # Wait up to KG_INTERVAL for a new camera frame
-        deadline = t0 + KG_INTERVAL
-        b64 = None
-        cam_ts = None
-        while time.time() < deadline:
+        # Sample one frame every KG_SAMPLE_INTERVAL seconds.
+        now = time.time()
+        new_frame = False
+        if now - last_sample_t >= KG_SAMPLE_INTERVAL:
             ts = r.get("camera:ts")
             if ts and ts != last_cam_ts:
                 frame = r.get("camera:frame")
                 if frame:
-                    b64 = frame
-                    cam_ts = ts
-                    break
-            time.sleep(0.1)
+                    frame_buffer.append(frame)
+                    last_cam_ts = ts
+                    new_frame = True
+            last_sample_t = now
 
-        if b64 is None:
+        # Fire VLM only when a fresh frame was just added and the buffer is full.
+        if not new_frame or len(frame_buffer) < KG_FRAMES:
+            time.sleep(0.05)
             continue
 
-        # Grab freshest frame before the VLM call
-        ts2 = r.get("camera:ts")
-        if ts2 and ts2 != cam_ts:
-            frame2 = r.get("camera:frame")
-            if frame2:
-                b64 = frame2
-                cam_ts = ts2
-
-        last_cam_ts = cam_ts
+        batch = list(frame_buffer)  # latest KG_FRAMES frames
 
         # ── Call VLM ──────────────────────────────────────────────────────────
-        known_labels = store.existing_labels()
-        prompt = _build_prompt(known_labels)
         t_vlm = time.monotonic()
-        result = _call_vlm(b64, prompt)
+        result = _call_vlm(batch, _PROMPT)
         elapsed = time.monotonic() - t_vlm
 
         if not result:
             continue
 
-        # Timestamp after inference so vlm:latest.ts reflects when the caption
-        # was actually written, not when the VLM call started.
         now = time.time()
 
         # ── Write caption → vlm:latest ─────────────────────────────────────────
         caption = (result.get("caption") or "").strip()
         if caption:
-            r.set("vlm:latest", json.dumps({"text": caption, "ts": now, "frame_id": cam_ts}), ex=30)
+            r.set("vlm:latest", json.dumps({"text": caption, "ts": now, "frame_id": last_cam_ts}), ex=30)
             print(f"[kg] {elapsed:.1f}s  {caption[:90]}", flush=True)
 
-        new_objects   = result.get("new_objects")   or []
-        new_events    = result.get("new_events")    or []
+        objects       = result.get("objects")       or []
+        events        = result.get("events")        or []
         relationships = result.get("relationships") or []
-        changes       = result.get("changes")       or []
 
-        if not new_objects and not new_events and not relationships and not changes:
+        if not objects and not events and not relationships:
             continue
 
-        print(f"[kg]   objects={len(new_objects)} events={len(new_events)} rels={len(relationships)} changes={len(changes)}", flush=True)
+        print(f"[kg]   objects={len(objects)} events={len(events)} rels={len(relationships)}", flush=True)
 
         # Image is saved lazily — only when the first node is actually inserted.
-        # All new nodes this tick share the same image file.
+        # frame 0 is the primary image; extra frames are attached after.
         _img_id: list = []
         _img_path: list = []
 
         def _get_image():
             if not _img_id:
-                iid, ipath = store.save_image(b64)
+                iid, ipath = store.save_image(batch[0])
                 _img_id.append(iid)
                 _img_path.append(ipath)
             return _img_id[0], _img_path[0]
 
         added = 0
 
-        # ── Insert new objects ─────────────────────────────────────────────────
-        for item in new_objects:
+        # ── Insert objects with post-hoc fuzzy merge ───────────────────────────
+        for item in objects:
             label, attrs = _obj_label(item)
-            if not label or label in known_labels:
+            if not label:
                 continue
+            canonical = store.find_similar_object(label, KG_FUZZY_OBJ_THRESHOLD) or label
+            if canonical != label:
+                print(f"[kg]   ~ merge object: '{label}' → '{canonical}'", flush=True)
             img_id, img_path = _get_image()
-            store.add_object(label, attrs, img_id, img_path, now)
-            print(f"[kg]   + object: {label}", flush=True)
+            store.add_object(canonical, attrs, img_id, img_path, now)
+            for extra_b64 in batch[1:]:
+                eid, epath = store.save_image(extra_b64)
+                store.attach_image_to_label(canonical, eid, epath, now)
+            print(f"[kg]   + object: {canonical}", flush=True)
             added += 1
-            known_labels.add(label)
 
-        # ── Insert new events ──────────────────────────────────────────────────
-        for item in new_events:
+        # ── Insert events with post-hoc fuzzy merge ────────────────────────────
+        for item in events:
             desc, involves = _evt_desc(item)
-            if not desc or not _is_event_new(desc, now):
+            if not desc:
                 continue
+            canonical = store.find_similar_event(desc, KG_FUZZY_EVT_THRESHOLD) or desc
+            if canonical != desc:
+                print(f"[kg]   ~ merge event: '{desc[:50]}' → '{canonical[:50]}'", flush=True)
             img_id, img_path = _get_image()
-            store.add_event(desc, involves, img_id, img_path, now)
-            _record_event(desc, now)
-            print(f"[kg]   + event: {desc}", flush=True)
+            store.add_event(canonical, involves, img_id, img_path, now)
+            for extra_b64 in batch[1:]:
+                eid, epath = store.save_image(extra_b64)
+                store.attach_image_to_event(canonical, eid, epath, now)
+            print(f"[kg]   + event: {canonical[:70]}", flush=True)
             added += 1
 
-        # ── Insert relationships between objects ───────────────────────────────
+        # ── Insert relationships ───────────────────────────────────────────────
         seen_triples: set = set()
         for item in relationships:
             subj, pred, obj = _rel_triple(item)
@@ -348,16 +324,12 @@ def main():
             if key in seen_triples:
                 continue
             seen_triples.add(key)
-            if store.add_relationship(subj, pred, obj, now):
-                print(f"[kg]   ↔ {subj} —{pred}→ {obj}", flush=True)
+            # Resolve through fuzzy match so rels wire to canonical node labels
+            subj_can = store.find_similar_object(subj, KG_FUZZY_OBJ_THRESHOLD) or subj
+            obj_can  = store.find_similar_object(obj,  KG_FUZZY_OBJ_THRESHOLD) or obj
+            if store.add_relationship(subj_can, pred, obj_can, now):
+                print(f"[kg]   ↔ {subj_can} —{pred}→ {obj_can}", flush=True)
                 added += 1
-
-        # ── Handle changes (update last_seen) ──────────────────────────────────
-        for item in changes:
-            label, change_type = _chg_label(item)
-            if label:
-                print(f"[kg]   ~ change: {label} → {change_type}", flush=True)
-                store.touch_label(label, now)
 
         # ── Auto-link named faces ──────────────────────────────────────────────
         changed = added > 0

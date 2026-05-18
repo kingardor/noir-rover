@@ -649,6 +649,7 @@
     }
     .noir-err { color: var(--red); font-style: italic; }
     .tool-spin { display: inline-block; animation: spin 1s linear infinite; }
+    .noir-tool-pending { opacity: .45; animation: noir-dots 1.2s ease-in-out infinite; }
 
     .noir-thinking span {
       display: inline-block; width: 5px; height: 5px;
@@ -851,9 +852,9 @@
     }
     .kg-node-card { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
     .kg-node-body { padding: 10px 12px; overflow-y: auto; flex: 1; font-size: 11px; color: var(--fg-dim); }
-    .kg-images { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+    .kg-images { margin-top: 6px; }
     .kg-thumb {
-      width: 80px; height: 60px;
+      width: 100%; aspect-ratio: 16/9;
       object-fit: cover;
       border: 1px solid var(--border-hi);
       clip-path: polygon(3px 0,calc(100% - 3px) 0,100% 3px,100% calc(100% - 3px),calc(100% - 3px) 100%,3px 100%,0 calc(100% - 3px),0 3px);
@@ -1750,7 +1751,9 @@ async function chatStream(message, { onTool, onReply }) {
       if (!line.startsWith('data: ')) continue;
       try {
         const ev = JSON.parse(line.slice(6));
-        if (ev.type === 'tool_call') onTool(ev);
+        if (ev.type === 'tool_call_start') onTool({ ...ev, phase: 'start' });
+        else if (ev.type === 'tool_call_result') onTool({ ...ev, phase: 'result' });
+        else if (ev.type === 'tool_call') onTool(ev);
         else if (ev.type === 'reply') onReply(ev.text);
       } catch { /* malformed line */ }
     }
@@ -1781,11 +1784,26 @@ function noirBegin() {
 function noirAddTool(wrap, ev) {
   const ct = wrap.querySelector('.noir-calls');
   ct.style.display = '';
-  const argsStr = Object.keys(ev.args || {}).length ? JSON.stringify(ev.args) : '';
-  const resultStr = ev.result != null ? JSON.stringify(ev.result) : '';
-  const line = document.createElement('div');
-  line.innerHTML = `→ ${ev.name}(${argsStr})${resultStr ? `<br>&nbsp;&nbsp;↳ ${resultStr}` : ''}`;
-  ct.appendChild(line);
+  if (ev.phase === 'result') {
+    const line = ct.querySelector(`[data-tc-id="${ev.tc_id}"]`);
+    if (line) {
+      const pending = line.querySelector('.noir-tool-pending');
+      if (pending) pending.remove();
+      const resultStr = ev.result != null ? JSON.stringify(ev.result) : '';
+      if (resultStr) line.insertAdjacentHTML('beforeend', `<br>&nbsp;&nbsp;↳ ${resultStr}`);
+    }
+  } else {
+    const argsStr = Object.keys(ev.args || {}).length ? JSON.stringify(ev.args) : '';
+    const line = document.createElement('div');
+    line.dataset.tcId = ev.tc_id || ev.name;
+    if (ev.phase === 'start') {
+      line.innerHTML = `→ ${ev.name}(${argsStr}) <span class="noir-tool-pending">…</span>`;
+    } else {
+      const resultStr = ev.result != null ? JSON.stringify(ev.result) : '';
+      line.innerHTML = `→ ${ev.name}(${argsStr})${resultStr ? `<br>&nbsp;&nbsp;↳ ${resultStr}` : ''}`;
+    }
+    ct.appendChild(line);
+  }
   noirLog.scrollTop = noirLog.scrollHeight;
 }
 
@@ -1937,7 +1955,7 @@ function initKGNetwork() {
     },
     physics: {
       stabilization: { iterations: 100 },
-      barnesHut: { gravitationalConstant: -10000, springLength: 140, springConstant: 0.04, damping: 0.09 },
+      barnesHut: { gravitationalConstant: -6000, springLength: 80, springConstant: 0.05, damping: 0.12 },
     },
     interaction: { hover: true, tooltipDelay: 100 },
   });
@@ -1978,6 +1996,13 @@ async function pollKG() {
   const newEIds = new Set(newEdges.map(e => e.id));
   _kgEdges.update(newEdges);
   existingEIds.forEach(id => { if (!newEIds.has(id)) _kgEdges.remove(id); });
+
+  const nodesAdded = [...newIds].some(id => !existingIds.has(id));
+  if (nodesAdded && _kgNetwork) {
+    _kgNetwork.once('stabilizationIterationsDone', () =>
+      _kgNetwork.fit({ animation: { duration: 400, easingFunction: 'easeInOutQuad' } })
+    );
+  }
 }
 
 async function showKGNodeDetail(nodeId) {
@@ -2003,13 +2028,11 @@ async function showKGNodeDetail(nodeId) {
   `;
 
   if (d.images && d.images.length) {
-    html += `<div class="s-lbl" style="margin-bottom:6px">IMAGES (${d.images.length})</div>`;
-    html += `<div class="kg-images">` +
-      d.images.slice(0, 6).map(img => {
-        const src = `${API}/kg/image/${img.id}`;
-        return `<img src="${src}" class="kg-thumb" alt="${d.label}" loading="lazy" onclick="openLightbox('${src}')">`;
-      }).join('') +
-    `</div>`;
+    const img = d.images[0];
+    const src = `${API}/kg/image/${img.id}`;
+    const countLabel = d.images.length > 1 ? ` <span style="color:var(--fg-dim)">(${d.images.length} captures)</span>` : '';
+    html += `<div class="s-lbl" style="margin-bottom:6px">LAST SEEN${countLabel}</div>`;
+    html += `<div class="kg-images"><img src="${src}" class="kg-thumb" alt="${d.label}" loading="lazy" onclick="openLightbox('${src}')"></div>`;
   } else {
     html += `<div style="color:var(--fg-dim);font-size:10px;margin-top:6px;">no images attached</div>`;
   }
@@ -2069,7 +2092,12 @@ function switchTab(name) {
   kgEl.style.display = name === 'knowledge' ? 'flex' : 'none';
   if (name === 'knowledge') {
     if (!_kgNetwork) initKGNetwork();
-    pollKG();
+    pollKG().then(() => {
+      if (_kgNetwork) {
+        _kgNetwork.redraw();
+        _kgNetwork.fit({ animation: { duration: 400, easingFunction: 'easeInOutQuad' } });
+      }
+    });
     const di = document.getElementById('diary-date');
     if (!di.value) di.value = new Date().toISOString().slice(0, 10);
   }
@@ -2097,10 +2125,10 @@ function openLightbox(src) {
   document.getElementById('kg-lightbox-img').src = src;
   lb.classList.add('open');
 }
-document.getElementById('kg-lightbox').addEventListener('click', () => {
-  document.getElementById('kg-lightbox').classList.remove('open');
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') document.getElementById('kg-lightbox').classList.remove('open');
 });
 </script>
-<div id="kg-lightbox"><img id="kg-lightbox-img" src="" alt=""></div>
+<div id="kg-lightbox" onclick="this.classList.remove('open')"><img id="kg-lightbox-img" src="" alt=""></div>
 </body>
 </html>

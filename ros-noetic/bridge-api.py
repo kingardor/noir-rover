@@ -483,9 +483,8 @@ _NOIR_SYSTEM = (
     "you are a machine that moves through and perceives the physical world.\n\n"
     "STYLE: Dry. Clipped. Confident. 1–3 sentences max. Metric units. "
     "Occasional dry wit is fine. No asterisks, no parentheses, no bullet lists.\n\n"
-    "TOOLS: For visual questions call ask_about_scene — it does NOT move the robot. "
-    "Only call look_around when the user explicitly wants the robot to physically rotate and scan. "
-    "For history call recall. "
+    "TOOLS: For ANY visual question — what you see, identifying objects, reading text, describing items, "
+    "counting things, spatial layout — call ask_about_scene. It does NOT move the robot. "
     "For motion use the movement tools directly; never describe a movement instead of doing it."
 )
 
@@ -632,41 +631,16 @@ _TOOLS = [
     {"type": "function", "function": {
         "name": "ask_about_scene",
         "description": (
-            "Take a fresh camera snapshot and answer a visual question using the onboard VLM. "
-            "Does NOT move the robot. Use whenever the user wants to know what the camera currently sees. "
+            "Take a fresh camera snapshot and answer any visual question using the onboard VLM. "
+            "Does NOT move the robot. "
+            "Use for ANY question about what the camera sees: descriptions, identification, colour, "
+            "quantity, text, spatial layout, or anything else visual. "
             "Takes 3–15 s."
         ),
         "parameters": {"type": "object", "properties": {
-            "question": {"type": "string", "description": "The visual question to answer."},
+            "question": {"type": "string",
+                         "description": "The exact visual question to answer, as the user asked it."},
         }, "required": ["question"]},
-    }},
-    {"type": "function", "function": {
-        "name": "look_around",
-        "description": (
-            "Physically rotate the robot 360° while capturing frames with object detections at each heading. "
-            "MOVES THE ROBOT. Only use when the user explicitly wants the robot to rotate and survey its surroundings. "
-            "Takes ~12 s."
-        ),
-        "parameters": {"type": "object", "properties": {
-            "n_frames": {"type": "integer", "minimum": 4, "maximum": 16,
-                         "description": "Number of frames to capture. Default 8."},
-        }, "required": []},
-    }},
-    {"type": "function", "function": {
-        "name": "recall",
-        "description": (
-            "Search the knowledge graph for entities and events seen in the past. "
-            "Use for 'where did you see the cat?', 'have you seen Akash today?', 'what did you observe an hour ago?'. "
-            "Results are returned newest-first."
-        ),
-        "parameters": {"type": "object", "properties": {
-            "query":         {"type": "string",
-                              "description": "Label or keyword to search for (case-insensitive substring match)."},
-            "since_seconds": {"type": "integer",
-                              "description": "Only return nodes seen within the last N seconds. Omit for all time."},
-            "limit":         {"type": "integer",
-                              "description": "Maximum results to return. Default 10."},
-        }, "required": ["query"]},
     }},
 ]
 
@@ -676,8 +650,6 @@ _TOOL_DISPATCH: dict = {
     "turn":               lambda args: _tool_turn(**args),
     "stop":               lambda args: _tool_stop(),
     "ask_about_scene":    lambda args: _tool_ask_about_scene(**args),
-    "look_around":        lambda args: _tool_look_around(**args),
-    "recall":             lambda args: _tool_recall(**args),
 }
 
 
@@ -688,7 +660,7 @@ def agent_chat(req: ChatReq):
 
     messages = [{"role": "system", "content": _NOIR_SYSTEM}]
     messages.extend(history[-10:])
-    user_content = req.message + " /no_think" if _AGENT_PROVIDER == "mlx" else req.message
+    user_content = req.message + " /no_think"
     messages.append({"role": "user", "content": user_content})
 
     chat_url, chat_model, chat_headers = _provider_config()
@@ -711,8 +683,13 @@ def agent_chat(req: ChatReq):
                 )
                 resp.raise_for_status()
                 data    = resp.json()
+                if "error" in data:
+                    err = data["error"]
+                    final_reply = f"[noir] provider error: {err.get('message', err)}"
+                    break
                 msg     = (data.get("choices") or [{}])[0].get("message", {})
                 content = (msg.get("content") or "").strip()
+                print(f"[agent] content={content[:80]!r} tool_calls={bool(msg.get('tool_calls'))}", flush=True)
 
                 # defensive parse: Qwen3-VL-2B sometimes returns tool calls as text
                 tool_calls = msg.get("tool_calls") or []
@@ -740,6 +717,8 @@ def agent_chat(req: ChatReq):
                     except Exception:
                         args = {}
 
+                    yield f"data: {json.dumps({'type': 'tool_call_start', 'tc_id': tc_id, 'name': fn_name, 'args': args})}\n\n"
+
                     dispatcher = _TOOL_DISPATCH.get(fn_name)
                     if dispatcher is None:
                         result = {"ok": False, "error": f"unknown_tool: {fn_name}"}
@@ -750,7 +729,7 @@ def agent_chat(req: ChatReq):
                             result = {"ok": False, "error": str(exc)}
 
                     print(f"[agent] tool={fn_name} result={str(result)[:120]}", flush=True)
-                    yield f"data: {json.dumps({'type': 'tool_call', 'name': fn_name, 'args': args, 'result': result})}\n\n"
+                    yield f"data: {json.dumps({'type': 'tool_call_result', 'tc_id': tc_id, 'result': result})}\n\n"
 
                     messages.append({
                         "role":         "tool",

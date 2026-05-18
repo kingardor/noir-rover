@@ -120,7 +120,7 @@ local_resource(
 # Replaces the old separate vlm.py and kg_builder.py services.
 local_resource(
     'kg',
-    serve_cmd='set -a; [ -f .env ] && . .env; set +a; REDIS_URL=redis://localhost:6380 MLX_VLM_URL=http://localhost:8000 VLM_MODEL=mlx-community/Qwen3-VL-2B-Instruct-4bit KG_INTERVAL=10.0 /opt/homebrew/opt/micromamba/bin/micromamba run -n noir_env python -u vision/kg_builder.py',
+    serve_cmd='set -a; [ -f .env ] && . .env; set +a; REDIS_URL=redis://localhost:6380 MLX_VLM_URL=http://localhost:8000 VLM_MODEL=mlx-community/Qwen3-VL-2B-Instruct-4bit KG_SAMPLE_INTERVAL=3.0 KG_FRAMES=3 /opt/homebrew/opt/micromamba/bin/micromamba run -n noir_env python -u vision/kg_builder.py',
     deps=['vision/kg_builder.py', 'vision/kg_store.py'],
     labels=['native'],
     resource_deps=['bridge-ready', 'vlm-server-ready'],

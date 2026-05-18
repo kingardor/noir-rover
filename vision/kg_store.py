@@ -19,11 +19,21 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re as _re
 import threading
 import time
 import uuid
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Optional
+
+_ARTICLES_RE = _re.compile(r'^(a|an|the)\s+', flags=_re.IGNORECASE)
+
+
+def _kg_normalize(s: str) -> str:
+    """Lowercase, strip leading articles, collapse whitespace."""
+    s = _ARTICLES_RE.sub('', s.strip().lower())
+    return ' '.join(s.split())
 
 _HERE = Path(__file__).parent
 _ROOT = _HERE.parent
@@ -137,23 +147,32 @@ class KGStore:
             return node_id
 
     def add_event(self, description: str, involves_labels: list[str], img_id: str, img_path: str, ts: float) -> str:
-        """Create an Event node, link to involved Objects, and link to Image."""
+        """Upsert an Event node (merges on content), link to involved Objects, and link to Image.
+        On repeat sightings only the image edge is added; INVOLVES edges are created once."""
         with self._lock:
-            node_id = str(uuid.uuid4())
-            self._conn.execute(
-                "CREATE (:Event {id: $id, content: $content, ts: $ts})",
-                {"id": node_id, "content": description, "ts": ts},
+            res = self._conn.execute(
+                "MATCH (e:Event {content: $content}) RETURN e.id", {"content": description}
             )
-            for label in involves_labels:
-                res = self._conn.execute(
-                    "MATCH (o:Object {label: $label}) RETURN o.id", {"label": label}
+            is_new = not res.has_next()
+            if is_new:
+                node_id = str(uuid.uuid4())
+                self._conn.execute(
+                    "CREATE (:Event {id: $id, content: $content, ts: $ts})",
+                    {"id": node_id, "content": description, "ts": ts},
                 )
-                if res.has_next():
-                    obj_id = res.get_next()[0]
-                    self._conn.execute(
-                        "MATCH (e:Event {id: $eid}), (o:Object {id: $oid}) CREATE (e)-[:INVOLVES {ts: $ts}]->(o)",
-                        {"eid": node_id, "oid": obj_id, "ts": ts},
+                for label in involves_labels:
+                    obj_res = self._conn.execute(
+                        "MATCH (o:Object {label: $label}) RETURN o.id", {"label": label}
                     )
+                    if obj_res.has_next():
+                        obj_id = obj_res.get_next()[0]
+                        self._conn.execute(
+                            "MATCH (e:Event {id: $eid}), (o:Object {id: $oid}) "
+                            "CREATE (e)-[:INVOLVES {ts: $ts}]->(o)",
+                            {"eid": node_id, "oid": obj_id, "ts": ts},
+                        )
+            else:
+                node_id = res.get_next()[0]
             if img_id:
                 self._add_image_node(img_id, img_path, ts)
                 self._conn.execute(
@@ -218,6 +237,79 @@ class KGStore:
                 if val:
                     labels.add(val.lower())
         return labels
+
+    def find_similar_object(self, label: str, threshold: float = 0.82) -> str | None:
+        """Return an existing Object.label whose normalized form is similar to `label`.
+        Uses difflib.SequenceMatcher on normalized strings. Returns None if no match."""
+        norm_new = _kg_normalize(label)
+        if not norm_new:
+            return None
+        res = self._conn.execute("MATCH (o:Object) RETURN o.label")
+        best_ratio = 0.0
+        best_label = None
+        while res.has_next():
+            existing = res.get_next()[0]
+            if not existing:
+                continue
+            ratio = SequenceMatcher(None, norm_new, _kg_normalize(existing)).ratio()
+            if ratio > best_ratio:
+                best_ratio = ratio
+                best_label = existing
+        return best_label if best_ratio >= threshold else None
+
+    def find_similar_event(self, description: str, threshold: float = 0.78) -> str | None:
+        """Return an existing Event.content whose normalized form is similar to `description`."""
+        norm_new = _kg_normalize(description)
+        if not norm_new:
+            return None
+        res = self._conn.execute("MATCH (e:Event) RETURN e.content")
+        best_ratio = 0.0
+        best_content = None
+        while res.has_next():
+            existing = res.get_next()[0]
+            if not existing:
+                continue
+            ratio = SequenceMatcher(None, norm_new, _kg_normalize(existing)).ratio()
+            if ratio > best_ratio:
+                best_ratio = ratio
+                best_content = existing
+        return best_content if best_ratio >= threshold else None
+
+    def existing_event_descriptions(self) -> list[str]:
+        """Return all Event.content values."""
+        res = self._conn.execute("MATCH (e:Event) RETURN e.content")
+        descs = []
+        while res.has_next():
+            val = res.get_next()[0]
+            if val:
+                descs.append(val)
+        return descs
+
+    def attach_image_to_label(self, label: str, img_id: str, img_path: str, ts: float):
+        """Attach an Image to an Object node by label (PICTURED_IN edge)."""
+        with self._lock:
+            self._add_image_node(img_id, img_path, ts)
+            try:
+                self._conn.execute(
+                    "MATCH (o:Object {label: $label}), (i:Image {id: $iid}) "
+                    "CREATE (o)-[:PICTURED_IN]->(i)",
+                    {"label": label, "iid": img_id},
+                )
+            except Exception:
+                pass
+
+    def attach_image_to_event(self, description: str, img_id: str, img_path: str, ts: float):
+        """Attach an Image to an Event node by content (CAPTURED_AT edge)."""
+        with self._lock:
+            self._add_image_node(img_id, img_path, ts)
+            try:
+                self._conn.execute(
+                    "MATCH (e:Event {content: $content}), (i:Image {id: $iid}) "
+                    "CREATE (e)-[:CAPTURED_AT]->(i)",
+                    {"content": description, "iid": img_id},
+                )
+            except Exception:
+                pass
 
     def query_by_label(self, label: str) -> list[dict]:
         """Find nodes whose name/label/description contains `label` (case-insensitive)."""

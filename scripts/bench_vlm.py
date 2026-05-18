@@ -1,18 +1,16 @@
 #!/usr/bin/env python3
 """
-VLM head-to-head benchmark — mlx_vlm.server vs SwiftLM.
-
-Sends identical requests to two OpenAI-compatible servers and compares
-median end-to-end latency on the exact KG-builder workload.
+VLM latency benchmark — mlx_vlm.server on the kg_builder workload.
 
 Usage:
-    # Baseline
-    python scripts/bench_vlm.py --server-url http://localhost:8000 \
-        --model mlx-community/Qwen3-VL-2B-Instruct-4bit --trials 20
+    # Single-image baseline
+    python scripts/bench_vlm.py --server-url http://localhost:8000 --trials 10
 
-    # SwiftLM candidate
-    python scripts/bench_vlm.py --server-url http://localhost:8001 \
-        --model mlx-community/Qwen3-VL-2B-Instruct-4bit --trials 20
+    # 3-image batch (production mode)
+    python scripts/bench_vlm.py --batch-size 3 --trials 10
+
+    # Compare against a second server
+    python scripts/bench_vlm.py --server-url http://localhost:8001 --trials 20
 """
 
 import argparse
@@ -30,28 +28,28 @@ import cv2
 import requests
 from PIL import Image
 
-# ── KG-builder prompt (exact template from vision/kg_builder.py) ───────────────
+# ── KG-builder prompt (mirrors vision/kg_builder.py _PROMPT) ──────────────────
 _KG_PROMPT = """\
-You are a robot's perception system. Study this image and report what you observe.
-
-Things already in my knowledge graph: [nothing yet]
+You are a robot's perception system. Frames captured seconds apart from the \
+same vantage are below. Treat them as one scene observed over a brief moment.
 
 Return ONLY valid JSON — no markdown, no prose, no code fences:
 
 {
   "caption": "One clear sentence describing the overall scene",
-  "new_objects": [{"label": "...", "attrs": {"color": "...", "size": "..."}}],
-  "new_events":  [{"description": "...", "involves": ["label1", "label2"]}],
-  "relationships": [{"subject": "label1", "predicate": "on", "object": "label2"}],
-  "changes":     [{"label": "...", "change": "moved|appeared|disappeared"}]
+  "objects":  [{"label": "...", "attrs": {"color": "...", "size": "..."}}],
+  "events":   [{"description": "...", "involves": ["label1", "label2"]}],
+  "relationships": [{"subject": "label1", "predicate": "on", "object": "label2"}]
 }
 
 Rules:
-- new_objects: every physically distinct, nameable thing NOT already in my graph. Use short noun labels.
-- new_events: transient actions or situations.
-- relationships: spatial or functional facts between entities.
-- changes: things already in my graph that have visibly moved or changed.
-- Use empty arrays only when truly nothing applies. Always include caption. /no_think"""
+- objects: every physically distinct, nameable thing across the frames. \
+Short noun labels (≤4 words). Be thorough.
+- events: transient actions or situations visible in any frame. Include \
+the object labels involved.
+- relationships: spatial facts. Subject and object must be object labels. \
+Use snake_case predicates. Only emit when confident.
+- Use empty arrays when nothing applies. Always include caption. /no_think"""
 
 
 def _extract_frames(video_path: str, n: int) -> list[bytes]:
@@ -98,6 +96,7 @@ def run_benchmark(
     image_size: int,
     trials: int,
     warmup: int,
+    batch_size: int = 1,
 ) -> dict:
     url = server_url.rstrip("/") + "/v1/chat/completions"
 
@@ -109,7 +108,7 @@ def run_benchmark(
     sample_outputs = []
 
     print(f"\n[bench] server={server_url}  model={model.split('/')[-1]}")
-    print(f"[bench] {trials} trials ({warmup} warmup), {n_frames} frames cycling, {image_size}px, max_tokens={max_tokens}")
+    print(f"[bench] {trials} trials ({warmup} warmup), {n_frames} source frames, batch_size={batch_size}, {image_size}px, max_tokens={max_tokens}")
     print(f"[bench] endpoint: {url}")
 
     # Verify server reachable
@@ -125,13 +124,16 @@ def run_benchmark(
 
     total = trials + warmup
     for i in range(total):
-        b64 = encoded[i % n_frames]
+        # Build a batch of `batch_size` consecutive frames (cycled)
+        batch_b64s = [encoded[(i * batch_size + j) % n_frames] for j in range(batch_size)]
+        content = [
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b}"}}
+            for b in batch_b64s
+        ]
+        content.append({"type": "text", "text": prompt})
         payload = {
             "model": model,
-            "messages": [{"role": "user", "content": [
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-                {"type": "text", "text": prompt},
-            ]}],
+            "messages": [{"role": "user", "content": content}],
             "temperature": 0.0,
             "max_tokens": max_tokens,
             "stream": False,
@@ -209,10 +211,12 @@ def main():
     ap.add_argument("--model",       default="mlx-community/Qwen3-VL-2B-Instruct-4bit")
     ap.add_argument("--frames",      default=default_video,
                     help="Path to MP4 file or directory of JPEGs")
+    ap.add_argument("--batch-size",  type=int, default=1,
+                    help="Images per VLM call (3 = production mode)")
     ap.add_argument("--trials",      type=int, default=20)
     ap.add_argument("--warmup",      type=int, default=3)
-    ap.add_argument("--max-tokens",  type=int, default=300)
-    ap.add_argument("--image-size",  type=int, default=384)
+    ap.add_argument("--max-tokens",  type=int, default=800)
+    ap.add_argument("--image-size",  type=int, default=256)
     ap.add_argument("--prompt",      default=_KG_PROMPT)
     ap.add_argument("--out-dir",     default=default_reports)
     args = ap.parse_args()
@@ -240,6 +244,7 @@ def main():
         image_size=args.image_size,
         trials=args.trials,
         warmup=args.warmup,
+        batch_size=args.batch_size,
     )
 
     if result:
