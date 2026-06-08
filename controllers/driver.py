@@ -33,8 +33,9 @@ import CoreHaptics as CH
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-BRIDGE_URL  = os.getenv("BRIDGE_URL", "http://localhost:8012")
-REDIS_URL   = os.getenv("REDIS_URL",  "redis://localhost:6380")
+BRIDGE_URL  = os.getenv("BRIDGE_URL",    "http://localhost:8012")
+REDIS_URL   = os.getenv("REDIS_URL",    "redis://localhost:6380")
+DEBUG       = os.getenv("DRIVER_DEBUG", "0") == "1"
 
 POLL_HZ     = 60
 DEADZONE    = 0.08
@@ -47,11 +48,15 @@ SPEED = {
     "precision": (0.22,  3.0),
 }
 
+DRIFT_STRAFE_MAX = 0.6   # lateral coupling in drift mode (m/s); raise for more swing, lower for subtle
+DRIFT_SMOOTHING  = 0.20  # per-frame lerp factor — ~120 ms ramp at 60 Hz
+
 # PS5 lightbar colors — GCColor takes 0.0–1.0 floats
 _C_IDLE      = (30/255,  30/255,  80/255)   # dim blue
 _C_PRECISION = (60/255,   0/255, 180/255)   # purple   — L2 held
 _C_BOOST     = (255/255, 100/255,  0/255)   # orange   — R2 held (brightness ∝ speed)
 _C_ROTATE    = (200/255, 200/255,  0/255)   # yellow   — L1 / R1
+_C_DRIFT     = (255/255,  30/255,  30/255)  # red      — drift mode active
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -158,9 +163,12 @@ class Session:
             light.setColor_(_gc_color(r, g, b))
         self._color = color
 
-    def update_light(self, lt, rt, rotating, speed_norm):
+    def update_light(self, lt, rt, rotating, speed_norm, drift_mode=False):
         """Update PS5 lightbar based on driving state."""
         if not self.ps5:
+            return
+        if drift_mode:
+            self._set_light(*_C_DRIFT)
             return
         if lt:
             self._set_light(*_C_PRECISION)
@@ -176,7 +184,7 @@ class Session:
             self._set_light(*_C_IDLE)
 
     def read(self):
-        """Return (LY, RX, LT, RT, LB, RB). Left Y = fwd, right X = strafe, L1/R1 = rotate."""
+        """Return (LY, RX, LT, RT, LB, RB, BTN_A, BTN_B). A=Cross/X, B=Circle/O."""
         gp = self.gp
         return (
             _dz(_clamp(gp.leftThumbstick().yAxis().value())),
@@ -185,6 +193,8 @@ class Session:
             _clamp(gp.rightTrigger().value(), 0.0, 1.0),
             bool(gp.leftShoulder().isPressed()),
             bool(gp.rightShoulder().isPressed()),
+            bool(gp.buttonA().isPressed()),
+            bool(gp.buttonB().isPressed()),
         )
 
     def buzz(self, style: str):
@@ -218,7 +228,11 @@ def _sender_loop(rc):
 
         endpoint, payload = item
         try:
+            if DEBUG:
+                print(f"[send] {payload}", flush=True)
             r = http.post(f"{BRIDGE_URL}/{endpoint}", json=payload, timeout=0.5)
+            if DEBUG:
+                print(f"[recv] {r.status_code} {r.text[:80]}", flush=True)
             if r.status_code != 200:
                 msg = f"bridge {r.status_code}: {r.text[:120]}"
                 now = time.time()
@@ -280,10 +294,14 @@ def main():
     sender = threading.Thread(target=_sender_loop, args=(rc,), daemon=True, name="sender")
     sender.start()
 
-    session    = None
-    prev_lt    = False
-    prev_rt    = False
-    was_moving = False
+    session      = None
+    prev_lt      = False
+    prev_rt      = False
+    was_moving   = False
+    drift_mode   = False
+    prev_a       = False
+    prev_b       = False
+    drift_strafe = 0.0
 
     try:
         while True:
@@ -298,8 +316,10 @@ def main():
             if session is not None and session.ctrl not in controllers:
                 print("[ctrl] Disconnected")
                 session.teardown()
-                session    = None
-                prev_lt    = prev_rt = was_moving = False
+                session      = None
+                prev_lt      = prev_rt = was_moving = False
+                drift_mode   = False
+                drift_strafe = 0.0
                 _send_stop()
                 continue
 
@@ -316,7 +336,7 @@ def main():
                 continue
 
             # ── Inputs ───────────────────────────────────────────────────────
-            LY, RX, LT, RT, LB, RB = session.read()
+            LY, RX, LT, RT, LB, RB, BTN_A, BTN_B = session.read()
 
             lt = LT > TRIG_PRESS
             rt = RT > TRIG_PRESS
@@ -327,23 +347,56 @@ def main():
                 session.buzz("boost")
             prev_lt, prev_rt = lt, rt
 
-            # ── Velocity ─────────────────────────────────────────────────────
-            if lt:
-                fwdmax, rotmax = SPEED["precision"]
-            elif rt:
-                fwdmax, rotmax = SPEED["boost"]
-            else:
-                fwdmax, rotmax = SPEED["base"]
+            # ── Drift mode toggle ─────────────────────────────────────────────
+            if BTN_A and not prev_a and not drift_mode:
+                drift_mode   = True
+                drift_strafe = 0.0
+                session.buzz("boost")
+            elif BTN_B and not prev_b and drift_mode:
+                drift_mode   = False
+                drift_strafe = 0.0
+                session.buzz("precision")
+            prev_a, prev_b = BTN_A, BTN_B
 
-            fwd    = LY * fwdmax
-            strafe = RX * fwdmax
-            rotate = (LB - RB) * rotmax
+            # ── Velocity ─────────────────────────────────────────────────────
+            if drift_mode:
+                # Left stick: forward/back at boost speed.
+                # Right stick X: coupled rotation + opposite-sign strafe (rear swings outward).
+                fwdmax        = SPEED["boost"][0]
+                fwd           = LY * fwdmax
+                rotate        = RX * SPEED["boost"][1]
+                target_strafe = -RX * DRIFT_STRAFE_MAX
+                drift_strafe += (target_strafe - drift_strafe) * DRIFT_SMOOTHING
+                strafe        = drift_strafe
+            else:
+                if lt:
+                    fwdmax, rotmax = SPEED["precision"]
+                elif rt:
+                    fwdmax, rotmax = SPEED["boost"]
+                else:
+                    fwdmax, rotmax = SPEED["base"]
+                fwd    = LY * fwdmax
+                strafe = RX * fwdmax
+                rotate = (LB - RB) * rotmax
+
+            # ── Wheel-speed budget normalization ─────────────────────────────
+            # Mecanum: wheel speeds are additive (vy ± ω*d). At full boost linear
+            # + full boost rotation, FR/BL wheels exceed motor limits → MotorNode faults.
+            # Scale the combined vector proportionally so neither component starves.
+            lin_fraction = max(abs(fwd), abs(strafe)) / 1.5
+            rot_fraction = abs(rotate) / 12.0
+            combined = lin_fraction + rot_fraction
+            if combined > 1.0:
+                scale  = 1.0 / combined
+                fwd   *= scale
+                strafe *= scale
+                rotate *= scale
 
             moving = abs(fwd) > 1e-3 or abs(strafe) > 1e-3 or abs(rotate) > 1e-3
 
             # ── Lightbar ─────────────────────────────────────────────────────
             speed_norm = max(abs(fwd), abs(strafe)) / max(fwdmax, 1e-6)
-            session.update_light(lt, rt, abs(rotate) > 0.01, speed_norm)
+            session.update_light(lt, rt, abs(rotate) > 0.01, speed_norm, drift_mode)
 
             # ── Send ─────────────────────────────────────────────────────────
             if moving:
